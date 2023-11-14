@@ -39,6 +39,8 @@
   },
   "type": "module",
   "dependencies": {
-    "@tauri-apps/api": "^1.5.1"
+    "@codemirror/lang-wast": "^6.0.1",
+    "@tauri-apps/api": "^1.5.1",
+    "svelte-codemirror-editor": "^1.1.0"
   }
 }

@@ -1,6 +1,6 @@
 <script>
-	import Greet from '../lib/component/Greet.svelte';
+	import Editor from '$lib/component/Editor.svelte';
 </script>
 
 <h1>Welcome to SvelteKit</h1>
-<Greet />
+<Editor />
