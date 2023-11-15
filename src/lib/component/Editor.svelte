@@ -59,7 +59,7 @@
 				<h3>Instructions</h3>
 				<ul>
 					{#each f.body as instruction, i}
-						<li>Step {i + 1}: {instruction}</li>
+						<li>Step {i + 1}: {JSON.stringify(instruction)}</li>
 					{/each}
 				</ul>
 				<h3>Return</h3>
