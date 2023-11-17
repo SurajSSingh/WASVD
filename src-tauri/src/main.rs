@@ -1,48 +1,45 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use error::WatError;
 use wast::parser::{self, ParseBuffer};
 use wast::Wat;
 
-mod error {
-    use serde::Serialize;
-    use specta::Type;
-    use wast::{token::Span, Error as WastError};
-
-    /// Error Information
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
-    pub struct ErrorHolder {
-        pub(crate) offset: usize,
-        pub(crate) message: String,
-    }
-
-    impl From<WastError> for ErrorHolder {
-        fn from(value: WastError) -> Self {
-            value.span().offset();
-
-            ErrorHolder {
-                offset: value.span().offset(),
-                message: value.message(),
-            }
-        }
-    }
-
-    /// Create new unimplemented error
-    pub fn unimplemented_error(msg: &str) -> WastError {
-        WastError::new(Span::from_offset(0), format!("Unimplemented Error: {msg}"))
-    }
-}
+mod error;
+mod marker;
 
 mod interp {
-    use crate::error::unimplemented_error;
+    use crate::error;
+    use crate::error::WatError;
+    use crate::error::WatResult;
+    use crate::marker::try_arithmetic_from;
+    use crate::marker::BitType;
+    use crate::marker::BlockKind;
+    // use crate::marker::try_bit_type_from;
+    use crate::marker::try_bitwise_from;
+    use crate::marker::try_block_kind_from;
+    use crate::marker::try_byte_count_from;
+    use crate::marker::try_cast_kind_from;
+    use crate::marker::try_comparison_from;
+    use crate::marker::try_data_instruction_from;
+    use crate::marker::try_float_op_from;
+    use crate::marker::try_simple_instruction_from;
+    use crate::marker::ArithmeticOperation;
+    // use crate::marker::BitType;
+    use crate::marker::BitwiseOperation;
+    use crate::marker::ByteKind;
+    use crate::marker::ComparisonOperation;
+    use crate::marker::DataInstruction;
+    use crate::marker::FloatOperation;
+    use crate::marker::NumberKind;
+    use crate::marker::NumericConversionKind;
+    use crate::marker::NumericOperationKind;
+    use crate::marker::SerializableWatType;
+    use crate::marker::SimpleInstruction;
 
-    use super::error;
     use serde::Deserialize;
     use serde::Serialize;
     use specta::Type;
-
-    use wast::parser::Result as WastResult;
-    use wast::Error as WastError;
 
     use wast::core::ModuleField;
     use wast::token::Id;
@@ -61,185 +58,669 @@ mod interp {
 
     use wast::core::ValType;
 
-    /// All Wat types that can be (currently) serialized.
-    ///
-    /// ## Limitations
-    /// All except [ValType::Ref] are supported, but must explicity convert.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-    pub enum SerializableWatType {
-        I32,
-        I64,
-        F32,
-        F64,
-        V128,
-    }
-
-    impl<'a> TryFrom<ValType<'a>> for SerializableWatType {
-        type Error = WastError;
-
-        /// Try to go from [ValType] to [SerializableWatType]
-        fn try_from(value: ValType) -> Result<Self, Self::Error> {
-            match value {
-                ValType::I32 => Ok(SerializableWatType::I32),
-                ValType::I64 => Ok(SerializableWatType::I64),
-                ValType::F32 => Ok(SerializableWatType::F32),
-                ValType::F64 => Ok(SerializableWatType::F64),
-                ValType::V128 => Ok(SerializableWatType::V128),
-                ValType::Ref(_) => Err(unimplemented_error("Cannot use Ref type")),
-            }
+    pub fn is_64_bit_instruction(instruction: &Instruction) -> Option<bool> {
+        match instruction {
+            Instruction::I32Load(_)
+            | Instruction::F32Load(_)
+            | Instruction::I32Load8s(_)
+            | Instruction::I32Load8u(_)
+            | Instruction::I32Load16s(_)
+            | Instruction::I32Load16u(_)
+            | Instruction::I32Store(_)
+            | Instruction::F32Store(_)
+            | Instruction::I32Store8(_)
+            | Instruction::I32Store16(_)
+            | Instruction::I32Const(_)
+            | Instruction::F32Const(_)
+            | Instruction::I32Clz
+            | Instruction::I32Ctz
+            | Instruction::I32Popcnt
+            | Instruction::I32Add
+            | Instruction::I32Sub
+            | Instruction::I32Mul
+            | Instruction::I32DivS
+            | Instruction::I32DivU
+            | Instruction::I32RemS
+            | Instruction::I32RemU
+            | Instruction::I32And
+            | Instruction::I32Or
+            | Instruction::I32Xor
+            | Instruction::I32Shl
+            | Instruction::I32ShrS
+            | Instruction::I32ShrU
+            | Instruction::I32Rotl
+            | Instruction::I32Rotr
+            | Instruction::F32Abs
+            | Instruction::F32Neg
+            | Instruction::F32Ceil
+            | Instruction::F32Floor
+            | Instruction::F32Trunc
+            | Instruction::F32Nearest
+            | Instruction::F32Sqrt
+            | Instruction::F32Add
+            | Instruction::F32Sub
+            | Instruction::F32Mul
+            | Instruction::F32Div
+            | Instruction::F32Min
+            | Instruction::F32Max
+            | Instruction::F32Copysign
+            | Instruction::I32Eqz
+            | Instruction::I32Eq
+            | Instruction::I32Ne
+            | Instruction::I32LtS
+            | Instruction::I32LtU
+            | Instruction::I32GtS
+            | Instruction::I32GtU
+            | Instruction::I32LeS
+            | Instruction::I32LeU
+            | Instruction::I32GeS
+            | Instruction::I32GeU
+            | Instruction::F32Eq
+            | Instruction::F32Ne
+            | Instruction::F32Lt
+            | Instruction::F32Gt
+            | Instruction::F32Le
+            | Instruction::F32Ge
+            | Instruction::I32WrapI64
+            | Instruction::I32TruncF32S
+            | Instruction::I32TruncF32U
+            | Instruction::I32TruncF64S
+            | Instruction::I32TruncF64U
+            | Instruction::F32ConvertI32S
+            | Instruction::F32ConvertI32U
+            | Instruction::F32ConvertI64S
+            | Instruction::F32ConvertI64U
+            | Instruction::F32DemoteF64
+            | Instruction::I32ReinterpretF32
+            | Instruction::F32ReinterpretI32
+            | Instruction::I32TruncSatF32S
+            | Instruction::I32TruncSatF32U
+            | Instruction::I32TruncSatF64S
+            | Instruction::I32TruncSatF64U
+            | Instruction::I32Extend8S
+            | Instruction::I32Extend16S => Some(false),
+            Instruction::I64Load(_)
+            | Instruction::F64Load(_)
+            | Instruction::I64Load8s(_)
+            | Instruction::I64Load8u(_)
+            | Instruction::I64Load16s(_)
+            | Instruction::I64Load16u(_)
+            | Instruction::I64Load32s(_)
+            | Instruction::I64Load32u(_)
+            | Instruction::I64Store(_)
+            | Instruction::F64Store(_)
+            | Instruction::I64Store8(_)
+            | Instruction::I64Store16(_)
+            | Instruction::I64Store32(_)
+            | Instruction::I64Const(_)
+            | Instruction::F64Const(_)
+            | Instruction::I64Clz
+            | Instruction::I64Ctz
+            | Instruction::I64Popcnt
+            | Instruction::I64Add
+            | Instruction::I64Sub
+            | Instruction::I64Mul
+            | Instruction::I64DivS
+            | Instruction::I64DivU
+            | Instruction::I64RemS
+            | Instruction::I64RemU
+            | Instruction::I64And
+            | Instruction::I64Or
+            | Instruction::I64Xor
+            | Instruction::I64Shl
+            | Instruction::I64ShrS
+            | Instruction::I64ShrU
+            | Instruction::I64Rotl
+            | Instruction::I64Rotr
+            | Instruction::F64Abs
+            | Instruction::F64Neg
+            | Instruction::F64Ceil
+            | Instruction::F64Floor
+            | Instruction::F64Trunc
+            | Instruction::F64Nearest
+            | Instruction::F64Sqrt
+            | Instruction::F64Add
+            | Instruction::F64Sub
+            | Instruction::F64Mul
+            | Instruction::F64Div
+            | Instruction::F64Min
+            | Instruction::F64Max
+            | Instruction::F64Copysign
+            | Instruction::I64Eqz
+            | Instruction::I64Eq
+            | Instruction::I64Ne
+            | Instruction::I64LtS
+            | Instruction::I64LtU
+            | Instruction::I64GtS
+            | Instruction::I64GtU
+            | Instruction::I64LeS
+            | Instruction::I64LeU
+            | Instruction::I64GeS
+            | Instruction::I64GeU
+            | Instruction::F64Eq
+            | Instruction::F64Ne
+            | Instruction::F64Lt
+            | Instruction::F64Gt
+            | Instruction::F64Le
+            | Instruction::F64Ge
+            | Instruction::I64ExtendI32S
+            | Instruction::I64ExtendI32U
+            | Instruction::I64TruncF32S
+            | Instruction::I64TruncF32U
+            | Instruction::I64TruncF64S
+            | Instruction::I64TruncF64U
+            | Instruction::F64ConvertI32S
+            | Instruction::F64ConvertI32U
+            | Instruction::F64ConvertI64S
+            | Instruction::F64ConvertI64U
+            | Instruction::F64PromoteF32
+            | Instruction::I64ReinterpretF64
+            | Instruction::F64ReinterpretI64
+            | Instruction::I64TruncSatF32S
+            | Instruction::I64TruncSatF32U
+            | Instruction::I64TruncSatF64S
+            | Instruction::I64TruncSatF64U
+            | Instruction::I64Extend8S
+            | Instruction::I64Extend16S
+            | Instruction::I64Extend32S => Some(true),
+            // Instruction::MemoryAtomicNotify(_) => todo!(),
+            // Instruction::MemoryAtomicWait32(_) => todo!(),
+            // Instruction::MemoryAtomicWait64(_) => todo!(),
+            // Instruction::AtomicFence => todo!(),
+            // Instruction::I32AtomicLoad(_) => todo!(),
+            // Instruction::I64AtomicLoad(_) => todo!(),
+            // Instruction::I32AtomicLoad8u(_) => todo!(),
+            // Instruction::I32AtomicLoad16u(_) => todo!(),
+            // Instruction::I64AtomicLoad8u(_) => todo!(),
+            // Instruction::I64AtomicLoad16u(_) => todo!(),
+            // Instruction::I64AtomicLoad32u(_) => todo!(),
+            // Instruction::I32AtomicStore(_) => todo!(),
+            // Instruction::I64AtomicStore(_) => todo!(),
+            // Instruction::I32AtomicStore8(_) => todo!(),
+            // Instruction::I32AtomicStore16(_) => todo!(),
+            // Instruction::I64AtomicStore8(_) => todo!(),
+            // Instruction::I64AtomicStore16(_) => todo!(),
+            // Instruction::I64AtomicStore32(_) => todo!(),
+            // Instruction::I32AtomicRmwAdd(_) => todo!(),
+            // Instruction::I64AtomicRmwAdd(_) => todo!(),
+            // Instruction::I32AtomicRmw8AddU(_) => todo!(),
+            // Instruction::I32AtomicRmw16AddU(_) => todo!(),
+            // Instruction::I64AtomicRmw8AddU(_) => todo!(),
+            // Instruction::I64AtomicRmw16AddU(_) => todo!(),
+            // Instruction::I64AtomicRmw32AddU(_) => todo!(),
+            // Instruction::I32AtomicRmwSub(_) => todo!(),
+            // Instruction::I64AtomicRmwSub(_) => todo!(),
+            // Instruction::I32AtomicRmw8SubU(_) => todo!(),
+            // Instruction::I32AtomicRmw16SubU(_) => todo!(),
+            // Instruction::I64AtomicRmw8SubU(_) => todo!(),
+            // Instruction::I64AtomicRmw16SubU(_) => todo!(),
+            // Instruction::I64AtomicRmw32SubU(_) => todo!(),
+            // Instruction::I32AtomicRmwAnd(_) => todo!(),
+            // Instruction::I64AtomicRmwAnd(_) => todo!(),
+            // Instruction::I32AtomicRmw8AndU(_) => todo!(),
+            // Instruction::I32AtomicRmw16AndU(_) => todo!(),
+            // Instruction::I64AtomicRmw8AndU(_) => todo!(),
+            // Instruction::I64AtomicRmw16AndU(_) => todo!(),
+            // Instruction::I64AtomicRmw32AndU(_) => todo!(),
+            // Instruction::I32AtomicRmwOr(_) => todo!(),
+            // Instruction::I64AtomicRmwOr(_) => todo!(),
+            // Instruction::I32AtomicRmw8OrU(_) => todo!(),
+            // Instruction::I32AtomicRmw16OrU(_) => todo!(),
+            // Instruction::I64AtomicRmw8OrU(_) => todo!(),
+            // Instruction::I64AtomicRmw16OrU(_) => todo!(),
+            // Instruction::I64AtomicRmw32OrU(_) => todo!(),
+            // Instruction::I32AtomicRmwXor(_) => todo!(),
+            // Instruction::I64AtomicRmwXor(_) => todo!(),
+            // Instruction::I32AtomicRmw8XorU(_) => todo!(),
+            // Instruction::I32AtomicRmw16XorU(_) => todo!(),
+            // Instruction::I64AtomicRmw8XorU(_) => todo!(),
+            // Instruction::I64AtomicRmw16XorU(_) => todo!(),
+            // Instruction::I64AtomicRmw32XorU(_) => todo!(),
+            // Instruction::I32AtomicRmwXchg(_) => todo!(),
+            // Instruction::I64AtomicRmwXchg(_) => todo!(),
+            // Instruction::I32AtomicRmw8XchgU(_) => todo!(),
+            // Instruction::I32AtomicRmw16XchgU(_) => todo!(),
+            // Instruction::I64AtomicRmw8XchgU(_) => todo!(),
+            // Instruction::I64AtomicRmw16XchgU(_) => todo!(),
+            // Instruction::I64AtomicRmw32XchgU(_) => todo!(),
+            // Instruction::I32AtomicRmwCmpxchg(_) => todo!(),
+            // Instruction::I64AtomicRmwCmpxchg(_) => todo!(),
+            // Instruction::I32AtomicRmw8CmpxchgU(_) => todo!(),
+            // Instruction::I32AtomicRmw16CmpxchgU(_) => todo!(),
+            // Instruction::I64AtomicRmw8CmpxchgU(_) => todo!(),
+            // Instruction::I64AtomicRmw16CmpxchgU(_) => todo!(),
+            // Instruction::I64AtomicRmw32CmpxchgU(_) => todo!(),
+            // Instruction::V128Load(_) => todo!(),
+            // Instruction::V128Load8x8S(_) => todo!(),
+            // Instruction::V128Load8x8U(_) => todo!(),
+            // Instruction::V128Load16x4S(_) => todo!(),
+            // Instruction::V128Load16x4U(_) => todo!(),
+            // Instruction::V128Load32x2S(_) => todo!(),
+            // Instruction::V128Load32x2U(_) => todo!(),
+            // Instruction::V128Load8Splat(_) => todo!(),
+            // Instruction::V128Load16Splat(_) => todo!(),
+            // Instruction::V128Load32Splat(_) => todo!(),
+            // Instruction::V128Load64Splat(_) => todo!(),
+            // Instruction::V128Load32Zero(_) => todo!(),
+            // Instruction::V128Load64Zero(_) => todo!(),
+            // Instruction::V128Store(_) => todo!(),
+            // Instruction::V128Load8Lane(_) => todo!(),
+            // Instruction::V128Load16Lane(_) => todo!(),
+            // Instruction::V128Load32Lane(_) => todo!(),
+            // Instruction::V128Load64Lane(_) => todo!(),
+            // Instruction::V128Store8Lane(_) => todo!(),
+            // Instruction::V128Store16Lane(_) => todo!(),
+            // Instruction::V128Store32Lane(_) => todo!(),
+            // Instruction::V128Store64Lane(_) => todo!(),
+            // Instruction::V128Const(_) => todo!(),
+            // Instruction::I8x16Shuffle(_) => todo!(),
+            // Instruction::I8x16ExtractLaneS(_) => todo!(),
+            // Instruction::I8x16ExtractLaneU(_) => todo!(),
+            // Instruction::I8x16ReplaceLane(_) => todo!(),
+            // Instruction::I16x8ExtractLaneS(_) => todo!(),
+            // Instruction::I16x8ExtractLaneU(_) => todo!(),
+            // Instruction::I16x8ReplaceLane(_) => todo!(),
+            // Instruction::I32x4ExtractLane(_) => todo!(),
+            // Instruction::I32x4ReplaceLane(_) => todo!(),
+            // Instruction::I64x2ExtractLane(_) => todo!(),
+            // Instruction::I64x2ReplaceLane(_) => todo!(),
+            // Instruction::F32x4ExtractLane(_) => todo!(),
+            // Instruction::F32x4ReplaceLane(_) => todo!(),
+            // Instruction::F64x2ExtractLane(_) => todo!(),
+            // Instruction::F64x2ReplaceLane(_) => todo!(),
+            // Instruction::I8x16Swizzle => todo!(),
+            // Instruction::I8x16Splat => todo!(),
+            // Instruction::I16x8Splat => todo!(),
+            // Instruction::I32x4Splat => todo!(),
+            // Instruction::I64x2Splat => todo!(),
+            // Instruction::F32x4Splat => todo!(),
+            // Instruction::F64x2Splat => todo!(),
+            // Instruction::I8x16Eq => todo!(),
+            // Instruction::I8x16Ne => todo!(),
+            // Instruction::I8x16LtS => todo!(),
+            // Instruction::I8x16LtU => todo!(),
+            // Instruction::I8x16GtS => todo!(),
+            // Instruction::I8x16GtU => todo!(),
+            // Instruction::I8x16LeS => todo!(),
+            // Instruction::I8x16LeU => todo!(),
+            // Instruction::I8x16GeS => todo!(),
+            // Instruction::I8x16GeU => todo!(),
+            // Instruction::I16x8Eq => todo!(),
+            // Instruction::I16x8Ne => todo!(),
+            // Instruction::I16x8LtS => todo!(),
+            // Instruction::I16x8LtU => todo!(),
+            // Instruction::I16x8GtS => todo!(),
+            // Instruction::I16x8GtU => todo!(),
+            // Instruction::I16x8LeS => todo!(),
+            // Instruction::I16x8LeU => todo!(),
+            // Instruction::I16x8GeS => todo!(),
+            // Instruction::I16x8GeU => todo!(),
+            // Instruction::I32x4Eq => todo!(),
+            // Instruction::I32x4Ne => todo!(),
+            // Instruction::I32x4LtS => todo!(),
+            // Instruction::I32x4LtU => todo!(),
+            // Instruction::I32x4GtS => todo!(),
+            // Instruction::I32x4GtU => todo!(),
+            // Instruction::I32x4LeS => todo!(),
+            // Instruction::I32x4LeU => todo!(),
+            // Instruction::I32x4GeS => todo!(),
+            // Instruction::I32x4GeU => todo!(),
+            // Instruction::I64x2Eq => todo!(),
+            // Instruction::I64x2Ne => todo!(),
+            // Instruction::I64x2LtS => todo!(),
+            // Instruction::I64x2GtS => todo!(),
+            // Instruction::I64x2LeS => todo!(),
+            // Instruction::I64x2GeS => todo!(),
+            // Instruction::F32x4Eq => todo!(),
+            // Instruction::F32x4Ne => todo!(),
+            // Instruction::F32x4Lt => todo!(),
+            // Instruction::F32x4Gt => todo!(),
+            // Instruction::F32x4Le => todo!(),
+            // Instruction::F32x4Ge => todo!(),
+            // Instruction::F64x2Eq => todo!(),
+            // Instruction::F64x2Ne => todo!(),
+            // Instruction::F64x2Lt => todo!(),
+            // Instruction::F64x2Gt => todo!(),
+            // Instruction::F64x2Le => todo!(),
+            // Instruction::F64x2Ge => todo!(),
+            // Instruction::V128Not => todo!(),
+            // Instruction::V128And => todo!(),
+            // Instruction::V128Andnot => todo!(),
+            // Instruction::V128Or => todo!(),
+            // Instruction::V128Xor => todo!(),
+            // Instruction::V128Bitselect => todo!(),
+            // Instruction::V128AnyTrue => todo!(),
+            // Instruction::I8x16Abs => todo!(),
+            // Instruction::I8x16Neg => todo!(),
+            // Instruction::I8x16Popcnt => todo!(),
+            // Instruction::I8x16AllTrue => todo!(),
+            // Instruction::I8x16Bitmask => todo!(),
+            // Instruction::I8x16NarrowI16x8S => todo!(),
+            // Instruction::I8x16NarrowI16x8U => todo!(),
+            // Instruction::I8x16Shl => todo!(),
+            // Instruction::I8x16ShrS => todo!(),
+            // Instruction::I8x16ShrU => todo!(),
+            // Instruction::I8x16Add => todo!(),
+            // Instruction::I8x16AddSatS => todo!(),
+            // Instruction::I8x16AddSatU => todo!(),
+            // Instruction::I8x16Sub => todo!(),
+            // Instruction::I8x16SubSatS => todo!(),
+            // Instruction::I8x16SubSatU => todo!(),
+            // Instruction::I8x16MinS => todo!(),
+            // Instruction::I8x16MinU => todo!(),
+            // Instruction::I8x16MaxS => todo!(),
+            // Instruction::I8x16MaxU => todo!(),
+            // Instruction::I8x16AvgrU => todo!(),
+            // Instruction::I16x8ExtAddPairwiseI8x16S => todo!(),
+            // Instruction::I16x8ExtAddPairwiseI8x16U => todo!(),
+            // Instruction::I16x8Abs => todo!(),
+            // Instruction::I16x8Neg => todo!(),
+            // Instruction::I16x8Q15MulrSatS => todo!(),
+            // Instruction::I16x8AllTrue => todo!(),
+            // Instruction::I16x8Bitmask => todo!(),
+            // Instruction::I16x8NarrowI32x4S => todo!(),
+            // Instruction::I16x8NarrowI32x4U => todo!(),
+            // Instruction::I16x8ExtendLowI8x16S => todo!(),
+            // Instruction::I16x8ExtendHighI8x16S => todo!(),
+            // Instruction::I16x8ExtendLowI8x16U => todo!(),
+            // Instruction::I16x8ExtendHighI8x16u => todo!(),
+            // Instruction::I16x8Shl => todo!(),
+            // Instruction::I16x8ShrS => todo!(),
+            // Instruction::I16x8ShrU => todo!(),
+            // Instruction::I16x8Add => todo!(),
+            // Instruction::I16x8AddSatS => todo!(),
+            // Instruction::I16x8AddSatU => todo!(),
+            // Instruction::I16x8Sub => todo!(),
+            // Instruction::I16x8SubSatS => todo!(),
+            // Instruction::I16x8SubSatU => todo!(),
+            // Instruction::I16x8Mul => todo!(),
+            // Instruction::I16x8MinS => todo!(),
+            // Instruction::I16x8MinU => todo!(),
+            // Instruction::I16x8MaxS => todo!(),
+            // Instruction::I16x8MaxU => todo!(),
+            // Instruction::I16x8AvgrU => todo!(),
+            // Instruction::I16x8ExtMulLowI8x16S => todo!(),
+            // Instruction::I16x8ExtMulHighI8x16S => todo!(),
+            // Instruction::I16x8ExtMulLowI8x16U => todo!(),
+            // Instruction::I16x8ExtMulHighI8x16U => todo!(),
+            // Instruction::I32x4ExtAddPairwiseI16x8S => todo!(),
+            // Instruction::I32x4ExtAddPairwiseI16x8U => todo!(),
+            // Instruction::I32x4Abs => todo!(),
+            // Instruction::I32x4Neg => todo!(),
+            // Instruction::I32x4AllTrue => todo!(),
+            // Instruction::I32x4Bitmask => todo!(),
+            // Instruction::I32x4ExtendLowI16x8S => todo!(),
+            // Instruction::I32x4ExtendHighI16x8S => todo!(),
+            // Instruction::I32x4ExtendLowI16x8U => todo!(),
+            // Instruction::I32x4ExtendHighI16x8U => todo!(),
+            // Instruction::I32x4Shl => todo!(),
+            // Instruction::I32x4ShrS => todo!(),
+            // Instruction::I32x4ShrU => todo!(),
+            // Instruction::I32x4Add => todo!(),
+            // Instruction::I32x4Sub => todo!(),
+            // Instruction::I32x4Mul => todo!(),
+            // Instruction::I32x4MinS => todo!(),
+            // Instruction::I32x4MinU => todo!(),
+            // Instruction::I32x4MaxS => todo!(),
+            // Instruction::I32x4MaxU => todo!(),
+            // Instruction::I32x4DotI16x8S => todo!(),
+            // Instruction::I32x4ExtMulLowI16x8S => todo!(),
+            // Instruction::I32x4ExtMulHighI16x8S => todo!(),
+            // Instruction::I32x4ExtMulLowI16x8U => todo!(),
+            // Instruction::I32x4ExtMulHighI16x8U => todo!(),
+            // Instruction::I64x2Abs => todo!(),
+            // Instruction::I64x2Neg => todo!(),
+            // Instruction::I64x2AllTrue => todo!(),
+            // Instruction::I64x2Bitmask => todo!(),
+            // Instruction::I64x2ExtendLowI32x4S => todo!(),
+            // Instruction::I64x2ExtendHighI32x4S => todo!(),
+            // Instruction::I64x2ExtendLowI32x4U => todo!(),
+            // Instruction::I64x2ExtendHighI32x4U => todo!(),
+            // Instruction::I64x2Shl => todo!(),
+            // Instruction::I64x2ShrS => todo!(),
+            // Instruction::I64x2ShrU => todo!(),
+            // Instruction::I64x2Add => todo!(),
+            // Instruction::I64x2Sub => todo!(),
+            // Instruction::I64x2Mul => todo!(),
+            // Instruction::I64x2ExtMulLowI32x4S => todo!(),
+            // Instruction::I64x2ExtMulHighI32x4S => todo!(),
+            // Instruction::I64x2ExtMulLowI32x4U => todo!(),
+            // Instruction::I64x2ExtMulHighI32x4U => todo!(),
+            // Instruction::F32x4Ceil => todo!(),
+            // Instruction::F32x4Floor => todo!(),
+            // Instruction::F32x4Trunc => todo!(),
+            // Instruction::F32x4Nearest => todo!(),
+            // Instruction::F32x4Abs => todo!(),
+            // Instruction::F32x4Neg => todo!(),
+            // Instruction::F32x4Sqrt => todo!(),
+            // Instruction::F32x4Add => todo!(),
+            // Instruction::F32x4Sub => todo!(),
+            // Instruction::F32x4Mul => todo!(),
+            // Instruction::F32x4Div => todo!(),
+            // Instruction::F32x4Min => todo!(),
+            // Instruction::F32x4Max => todo!(),
+            // Instruction::F32x4PMin => todo!(),
+            // Instruction::F32x4PMax => todo!(),
+            // Instruction::F64x2Ceil => todo!(),
+            // Instruction::F64x2Floor => todo!(),
+            // Instruction::F64x2Trunc => todo!(),
+            // Instruction::F64x2Nearest => todo!(),
+            // Instruction::F64x2Abs => todo!(),
+            // Instruction::F64x2Neg => todo!(),
+            // Instruction::F64x2Sqrt => todo!(),
+            // Instruction::F64x2Add => todo!(),
+            // Instruction::F64x2Sub => todo!(),
+            // Instruction::F64x2Mul => todo!(),
+            // Instruction::F64x2Div => todo!(),
+            // Instruction::F64x2Min => todo!(),
+            // Instruction::F64x2Max => todo!(),
+            // Instruction::F64x2PMin => todo!(),
+            // Instruction::F64x2PMax => todo!(),
+            // Instruction::I32x4TruncSatF32x4S => todo!(),
+            // Instruction::I32x4TruncSatF32x4U => todo!(),
+            // Instruction::F32x4ConvertI32x4S => todo!(),
+            // Instruction::F32x4ConvertI32x4U => todo!(),
+            // Instruction::I32x4TruncSatF64x2SZero => todo!(),
+            // Instruction::I32x4TruncSatF64x2UZero => todo!(),
+            // Instruction::F64x2ConvertLowI32x4S => todo!(),
+            // Instruction::F64x2ConvertLowI32x4U => todo!(),
+            // Instruction::F32x4DemoteF64x2Zero => todo!(),
+            // Instruction::F64x2PromoteLowF32x4 => todo!(),
+            // Instruction::I8x16RelaxedSwizzle => todo!(),
+            // Instruction::I32x4RelaxedTruncF32x4S => todo!(),
+            // Instruction::I32x4RelaxedTruncF32x4U => todo!(),
+            // Instruction::I32x4RelaxedTruncF64x2SZero => todo!(),
+            // Instruction::I32x4RelaxedTruncF64x2UZero => todo!(),
+            // Instruction::F32x4RelaxedMadd => todo!(),
+            // Instruction::F32x4RelaxedNmadd => todo!(),
+            // Instruction::F64x2RelaxedMadd => todo!(),
+            // Instruction::F64x2RelaxedNmadd => todo!(),
+            // Instruction::I8x16RelaxedLaneselect => todo!(),
+            // Instruction::I16x8RelaxedLaneselect => todo!(),
+            // Instruction::I32x4RelaxedLaneselect => todo!(),
+            // Instruction::I64x2RelaxedLaneselect => todo!(),
+            // Instruction::F32x4RelaxedMin => todo!(),
+            // Instruction::F32x4RelaxedMax => todo!(),
+            // Instruction::F64x2RelaxedMin => todo!(),
+            // Instruction::F64x2RelaxedMax => todo!(),
+            // Instruction::I16x8RelaxedQ15mulrS => todo!(),
+            // Instruction::I16x8RelaxedDotI8x16I7x16S => todo!(),
+            // Instruction::I32x4RelaxedDotI8x16I7x16AddS => todo!(),
+            _ => None,
         }
     }
 
-    /// The kind of byte
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-    pub enum ByteKind {
-        Bits8 = 0,
-        Bits16 = 1,
-        Bits32 = 2,
-        Bits64 = 3,
-    }
-
-    impl ByteKind {
-        /// Produce [ByteKind] from an alignment number
-        pub fn from_alignment(value: u32) -> Self {
-            match value {
-                1 => ByteKind::Bits8,
-                2 => ByteKind::Bits16,
-                4 => ByteKind::Bits32,
-                _ => ByteKind::Bits64,
+    pub fn data_type_of_instruction(instruction: &Instruction) -> Option<SerializableWatType> {
+        match instruction {
+            Instruction::F32Load(_)
+            | Instruction::F32Store(_)
+            | Instruction::F32Const(_)
+            | Instruction::F32Abs
+            | Instruction::F32Neg
+            | Instruction::F32Ceil
+            | Instruction::F32Floor
+            | Instruction::F32Trunc
+            | Instruction::F32Nearest
+            | Instruction::F32Sqrt
+            | Instruction::F32Add
+            | Instruction::F32Sub
+            | Instruction::F32Mul
+            | Instruction::F32Div
+            | Instruction::F32Min
+            | Instruction::F32Max
+            | Instruction::F32Copysign
+            | Instruction::F32Eq
+            | Instruction::F32Ne
+            | Instruction::F32Lt
+            | Instruction::F32Gt
+            | Instruction::F32Le
+            | Instruction::F32Ge
+            | Instruction::F32ConvertI32S
+            | Instruction::F32ConvertI32U
+            | Instruction::F32ConvertI64S
+            | Instruction::F32ConvertI64U
+            | Instruction::F32DemoteF64
+            | Instruction::F32ReinterpretI32 => Some(SerializableWatType::F32),
+            Instruction::F64Load(_)
+            | Instruction::F64Store(_)
+            | Instruction::F64Const(_)
+            | Instruction::F64Abs
+            | Instruction::F64Neg
+            | Instruction::F64Ceil
+            | Instruction::F64Floor
+            | Instruction::F64Trunc
+            | Instruction::F64Nearest
+            | Instruction::F64Sqrt
+            | Instruction::F64Add
+            | Instruction::F64Sub
+            | Instruction::F64Mul
+            | Instruction::F64Div
+            | Instruction::F64Min
+            | Instruction::F64Max
+            | Instruction::F64Copysign
+            | Instruction::F64Eq
+            | Instruction::F64Ne
+            | Instruction::F64Lt
+            | Instruction::F64Gt
+            | Instruction::F64Le
+            | Instruction::F64Ge
+            | Instruction::F64ConvertI32S
+            | Instruction::F64ConvertI32U
+            | Instruction::F64PromoteF32
+            | Instruction::F64ConvertI64S
+            | Instruction::F64ConvertI64U
+            | Instruction::F64ReinterpretI64 => Some(SerializableWatType::F64),
+            Instruction::I32Load(_)
+            | Instruction::I32Load8s(_)
+            | Instruction::I32Load8u(_)
+            | Instruction::I32Load16s(_)
+            | Instruction::I32Load16u(_)
+            | Instruction::I32Store(_)
+            | Instruction::I32Store8(_)
+            | Instruction::I32Store16(_)
+            | Instruction::I32Const(_)
+            | Instruction::I32Clz
+            | Instruction::I32Ctz
+            | Instruction::I32Popcnt
+            | Instruction::I32Add
+            | Instruction::I32Sub
+            | Instruction::I32Mul
+            | Instruction::I32DivS
+            | Instruction::I32DivU
+            | Instruction::I32RemS
+            | Instruction::I32RemU
+            | Instruction::I32And
+            | Instruction::I32Or
+            | Instruction::I32Xor
+            | Instruction::I32Shl
+            | Instruction::I32ShrS
+            | Instruction::I32ShrU
+            | Instruction::I32Rotl
+            | Instruction::I32Rotr
+            | Instruction::I32Eqz
+            | Instruction::I32Eq
+            | Instruction::I32Ne
+            | Instruction::I32LtS
+            | Instruction::I32LtU
+            | Instruction::I32GtS
+            | Instruction::I32GtU
+            | Instruction::I32LeS
+            | Instruction::I32LeU
+            | Instruction::I32GeS
+            | Instruction::I32GeU
+            | Instruction::I32TruncF32S
+            | Instruction::I32TruncF32U
+            | Instruction::I32TruncF64S
+            | Instruction::I32TruncF64U
+            | Instruction::I32ReinterpretF32
+            | Instruction::I32TruncSatF32S
+            | Instruction::I32TruncSatF32U
+            | Instruction::I32TruncSatF64S
+            | Instruction::I32TruncSatF64U
+            | Instruction::I32Extend8S
+            | Instruction::I32Extend16S => Some(SerializableWatType::I32),
+            Instruction::I64Load(_)
+            | Instruction::I64Load8s(_)
+            | Instruction::I64Load8u(_)
+            | Instruction::I64Load16s(_)
+            | Instruction::I64Load16u(_)
+            | Instruction::I64Load32s(_)
+            | Instruction::I64Load32u(_)
+            | Instruction::I64Store(_)
+            | Instruction::I64Store8(_)
+            | Instruction::I64Store16(_)
+            | Instruction::I64Store32(_)
+            | Instruction::I64Const(_)
+            | Instruction::I64Clz
+            | Instruction::I64Ctz
+            | Instruction::I64Popcnt
+            | Instruction::I64Add
+            | Instruction::I64Sub
+            | Instruction::I64Mul
+            | Instruction::I64DivS
+            | Instruction::I64DivU
+            | Instruction::I64RemS
+            | Instruction::I64RemU
+            | Instruction::I64And
+            | Instruction::I64Or
+            | Instruction::I64Xor
+            | Instruction::I64Shl
+            | Instruction::I64ShrS
+            | Instruction::I64ShrU
+            | Instruction::I64Rotl
+            | Instruction::I64Rotr
+            | Instruction::I64Eqz
+            | Instruction::I64Eq
+            | Instruction::I64Ne
+            | Instruction::I64LtS
+            | Instruction::I64LtU
+            | Instruction::I64GtS
+            | Instruction::I64GtU
+            | Instruction::I64LeS
+            | Instruction::I64LeU
+            | Instruction::I64GeS
+            | Instruction::I64GeU
+            | Instruction::I32WrapI64
+            | Instruction::I64ExtendI32S
+            | Instruction::I64ExtendI32U
+            | Instruction::I64TruncF32S
+            | Instruction::I64TruncF32U
+            | Instruction::I64TruncF64S
+            | Instruction::I64TruncF64U
+            | Instruction::I64ReinterpretF64
+            | Instruction::I64TruncSatF32S
+            | Instruction::I64TruncSatF32U
+            | Instruction::I64TruncSatF64S
+            | Instruction::I64TruncSatF64U
+            | Instruction::I64Extend8S
+            | Instruction::I64Extend16S
+            | Instruction::I64Extend32S => Some(SerializableWatType::I64),
+            _ =>
+            /*TODO: Add others, all other types should either be V128 or Ref*/
+            {
+                None
             }
         }
-
-        /// Produce [ByteKind] from a number of bits (8 bits per byte)
-        pub fn from_bit_count(value: u32) -> Self {
-            match value {
-                8 => ByteKind::Bits8,
-                16 => ByteKind::Bits16,
-                32 => ByteKind::Bits32,
-                _ => ByteKind::Bits64,
-            }
-        }
-
-        /// Produce [ByteKind] from a number of byte
-        pub fn from_byte_count(value: u32) -> Self {
-            match value {
-                1 => ByteKind::Bits8,
-                2 => ByteKind::Bits16,
-                4 => ByteKind::Bits32,
-                _ => ByteKind::Bits64,
-            }
-        }
-    }
-
-    /// The kinds of bits we are observing
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-    pub enum BitType {
-        LeadingZero,
-        TrailingZero,
-        NonZero,
-    }
-
-    /// Comparison operations
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-    pub enum ComparisonOperation {
-        /// <0> == 0
-        EqualZero,
-        /// <0> == <1>
-        Equal,
-        /// <0> != <1>
-        NotEqual,
-        /// <0>_s < <1>_s
-        LessThenSigned,
-        /// <0>_u < <1>_u
-        LessThenUnsigned,
-        /// <0>_s > <1>_s
-        GreaterThenSigned,
-        /// <0>_u > <1>_u
-        GreaterThenUnsigned,
-        /// <0>_s <= <1>_s
-        LessThenOrEqualToSigned,
-        /// <0>_u <= <1>_u
-        LessThenOrEqualToUnsigned,
-        /// <0>_s >= <1>_s
-        GreaterThenOrEqualToSigned,
-        /// <0>_u >= <1>_u
-        GreaterThenOrEqualToUnsigned,
-    }
-
-    /// Arithmetic operations
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-    pub enum ArithmeticOperation {
-        /// <0> + <1>
-        Addition,
-        /// <0> - <1>
-        Subtraction,
-        /// <0> * <1>
-        Multiplication,
-        /// <0>_s / <1>_s
-        DivisonSigned,
-        /// <0>_u / <1>_u
-        DivisonUnsigned,
-        /// <0>_s % <1>_s
-        RemainderSigned,
-        /// <0>_u % <1>_u
-        RemainderUnsigned,
-    }
-
-    /// Bitwise operations
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-    pub enum BitwiseOperation {
-        /// <0> & <1>
-        And,
-        /// <0> | <1>
-        Or,
-        /// <0> ^ <1>
-        Xor,
-        /// <0> << <1>
-        ShiftLeft,
-        /// <0>_s >> <1>
-        ShiftRightSigned,
-        /// <0>_u >> <1>
-        ShiftRightUnsigned,
-        /// <0>_u rotate left by <1>_u
-        RotateLeft,
-        /// <0>_u rotate right by <1>_u
-        RotateRight,
-    }
-
-    /// Bitwise operations
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-    pub enum FloatOperation {
-        /// |<0>|
-        AbsoluteValue,
-        /// -(<0>)
-        Negation,
-        /// round_up_to_int(<0>)
-        Ceiling,
-        /// round_down_to_int(<0>)
-        Floor,
-        /// round_nearest_int_to_zero(<0>)
-        Truncate,
-        /// round_nearest_int_to_even(<0>)
-        Nearest,
-        /// √<0>
-        SquareRoot,
-        /// min(<0>, <1>)
-        Minimum,
-        /// max(<0>, <1>)
-        Maximum,
-        /// sign(<0>) == sign(<1>) ? <0> else -(<0>)
-        CopySign,
-    }
-
-    /// Kind of numeric operation
-    #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, derive_more::From,
-    )]
-    pub enum NumericOperationKind {
-        Comparison(ComparisonOperation),
-        Arithmetic(ArithmeticOperation),
-        Bitwise(BitwiseOperation),
-        Float(FloatOperation),
     }
 
     /// Represents input and output of a block of instructions.
@@ -252,7 +733,7 @@ mod interp {
     }
 
     impl TryFrom<&wast::core::TypeUse<'_, FunctionType<'_>>> for InputOutput {
-        type Error = WastError;
+        type Error = error::WatError;
         fn try_from(
             value: &wast::core::TypeUse<'_, FunctionType<'_>>,
         ) -> Result<Self, Self::Error> {
@@ -267,7 +748,7 @@ mod interp {
                             SerializableWatType::try_from(*vtype)
                                 .map(|swt| (id.map(|i| i.name().to_string()), swt))
                         })
-                        .collect::<Result<_, WastError>>()?,
+                        .collect::<Result<_, error::WatError>>()?,
                     output: ft
                         .results
                         .iter()
@@ -282,15 +763,6 @@ mod interp {
                 }
             })
         }
-    }
-
-    /// Control flow instructions
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type, Default)]
-    pub enum BlockKind {
-        #[default]
-        Regular,
-        If,
-        Loop,
     }
 
     /// Control flow instructions
@@ -318,6 +790,348 @@ mod interp {
     /// but is more generic over types (e.g. a single Add instruction that carries the type).
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
     pub enum SerializedInstruction {
+        Simple(SimpleInstruction),
+        Block {
+            label: String,
+            kind: BlockKind,
+            inout: Option<InputOutput>,
+        },
+        Branch {
+            default_label: String,
+            other_labels: Vec<String>,
+            is_conditional: bool,
+        },
+        Call {
+            index: String,
+            inout: InputOutput,
+        },
+        Data {
+            kind: DataInstruction,
+            location: String,
+        },
+        Memory {
+            location: String,
+            typ: SerializableWatType,
+            count: ByteKind,
+            offset: u32,
+            alignment: ByteKind,
+            is_storing: bool,
+        },
+        Const {
+            typ: SerializableWatType,
+            lower32bits: u32,
+            upper32bits: u32,
+        },
+        Comparison {
+            kind: ComparisonOperation,
+            typ: SerializableWatType,
+        },
+        Arithmetic {
+            kind: ArithmeticOperation,
+            typ: SerializableWatType,
+        },
+        Bitwise {
+            kind: BitwiseOperation,
+            is_64_bit: bool,
+        },
+        Float {
+            kind: FloatOperation,
+            is_64_bit: bool,
+        },
+        Cast(NumericConversionKind),
+        /// All other instructions not directly defined
+        DefaultString(String),
+    }
+
+    impl TryFrom<&Instruction<'_>> for SerializedInstruction {
+        type Error = error::WatError;
+
+        fn try_from(value: &Instruction<'_>) -> Result<Self, Self::Error> {
+            // TODO: Make this a macro to reduce common patterns
+            Ok(match value {
+                Instruction::Unreachable
+                | Instruction::Nop
+                | Instruction::Return
+                | Instruction::Drop => Self::Simple(
+                    try_simple_instruction_from(value)
+                        .ok_or(WatError::invalid_instruction("Simple", value))?,
+                ),
+                Instruction::Block(b) | Instruction::If(b) | Instruction::Loop(b) => Self::Block {
+                    label: b.label.map(|id| id.name().to_string()).unwrap_or_default(),
+                    kind: try_block_kind_from(value)
+                        .ok_or(WatError::invalid_instruction("Block Kind", value))?,
+                    inout: Some((&b.ty).try_into()?),
+                },
+                Instruction::Else(e) | Instruction::End(e) => Self::Block {
+                    label: e.map(|id| id.name().to_string()).unwrap_or_default(),
+                    kind: try_block_kind_from(value)
+                        .ok_or(WatError::invalid_instruction("Block Kind", value))?,
+                    inout: None,
+                },
+                Instruction::Br(i) => Self::Branch {
+                    default_label: index_to_string(i),
+                    other_labels: Vec::default(),
+                    is_conditional: false,
+                },
+                Instruction::BrIf(i) => Self::Branch {
+                    default_label: index_to_string(i),
+                    other_labels: Vec::default(),
+                    is_conditional: true,
+                },
+                Instruction::BrTable(br_table) => Self::Branch {
+                    default_label: index_to_string(&br_table.default),
+                    other_labels: br_table.labels.iter().map(|l| index_to_string(l)).collect(),
+                    is_conditional: true,
+                },
+                Instruction::Call(i) => Self::Call {
+                    index: index_to_string(i),
+                    inout: InputOutput::default(),
+                },
+                Instruction::CallIndirect(ci) => Self::Call {
+                    index: index_to_string(&ci.table),
+                    inout: (&ci.ty).try_into()?,
+                },
+                Instruction::LocalGet(i)
+                | Instruction::LocalSet(i)
+                | Instruction::LocalTee(i)
+                | Instruction::GlobalGet(i)
+                | Instruction::GlobalSet(i) => Self::Data {
+                    kind: try_data_instruction_from(value)
+                        .ok_or(WatError::invalid_instruction("Data", value))?,
+                    location: index_to_string(i),
+                },
+                Instruction::MemorySize(m) | Instruction::MemoryGrow(m) => Self::Data {
+                    kind: try_data_instruction_from(value).unwrap(),
+                    location: index_to_string(&m.mem),
+                },
+                Instruction::I32Load(m)
+                | Instruction::I64Load(m)
+                | Instruction::F32Load(m)
+                | Instruction::F64Load(m)
+                | Instruction::I32Load8s(m)
+                | Instruction::I32Load8u(m)
+                | Instruction::I32Load16s(m)
+                | Instruction::I32Load16u(m)
+                | Instruction::I64Load8s(m)
+                | Instruction::I64Load8u(m)
+                | Instruction::I64Load16s(m)
+                | Instruction::I64Load16u(m)
+                | Instruction::I64Load32s(m)
+                | Instruction::I64Load32u(m) => Self::Memory {
+                    location: index_to_string(&m.memory),
+                    typ: data_type_of_instruction(value).unwrap(),
+                    offset: m.offset as u32,
+                    alignment: ByteKind::from_alignment(m.align),
+                    count: try_byte_count_from(value)
+                        .ok_or(WatError::invalid_instruction("Memory", value))?,
+                    is_storing: false,
+                },
+                Instruction::I32Store(m)
+                | Instruction::I64Store(m)
+                | Instruction::F32Store(m)
+                | Instruction::F64Store(m)
+                | Instruction::I32Store8(m)
+                | Instruction::I32Store16(m)
+                | Instruction::I64Store8(m)
+                | Instruction::I64Store16(m)
+                | Instruction::I64Store32(m) => Self::Memory {
+                    location: index_to_string(&m.memory),
+                    typ: data_type_of_instruction(value).unwrap(),
+                    offset: m.offset as u32,
+                    alignment: ByteKind::from_alignment(m.align),
+                    count: try_byte_count_from(value)
+                        .ok_or(WatError::invalid_instruction("Memory", value))?,
+                    is_storing: true,
+                },
+                Instruction::I32Const(i) => Self::Const {
+                    typ: SerializableWatType::I32,
+                    lower32bits: u32::from_ne_bytes(i.to_ne_bytes()),
+                    upper32bits: 0,
+                },
+                Instruction::I64Const(i) => {
+                    let bytes = i.to_ne_bytes();
+                    let (lower_bytes, upper_bytes) = (
+                        [bytes[0], bytes[1], bytes[2], bytes[3]],
+                        [bytes[4], bytes[5], bytes[6], bytes[7]],
+                    );
+                    Self::Const {
+                        typ: SerializableWatType::I64,
+                        lower32bits: u32::from_ne_bytes(lower_bytes),
+                        upper32bits: u32::from_ne_bytes(upper_bytes),
+                    }
+                }
+                Instruction::F32Const(f) => Self::Const {
+                    typ: SerializableWatType::F32,
+                    lower32bits: u32::from_ne_bytes(f.bits.to_ne_bytes()),
+                    upper32bits: 0,
+                },
+                Instruction::F64Const(f) => {
+                    let bytes = f.bits.to_ne_bytes();
+                    let (lower_bytes, upper_bytes) = (
+                        [bytes[0], bytes[1], bytes[2], bytes[3]],
+                        [bytes[4], bytes[5], bytes[6], bytes[7]],
+                    );
+                    Self::Const {
+                        typ: SerializableWatType::I64,
+                        lower32bits: u32::from_ne_bytes(lower_bytes),
+                        upper32bits: u32::from_ne_bytes(upper_bytes),
+                    }
+                }
+                Instruction::I32Add
+                | Instruction::I32Sub
+                | Instruction::I32Mul
+                | Instruction::I32DivS
+                | Instruction::I32DivU
+                | Instruction::I32RemS
+                | Instruction::I32RemU
+                | Instruction::I64Add
+                | Instruction::I64Sub
+                | Instruction::I64Mul
+                | Instruction::I64DivS
+                | Instruction::I64DivU
+                | Instruction::I64RemS
+                | Instruction::I64RemU
+                | Instruction::F32Add
+                | Instruction::F32Sub
+                | Instruction::F32Mul
+                | Instruction::F32Div
+                | Instruction::F64Add
+                | Instruction::F64Sub
+                | Instruction::F64Mul
+                | Instruction::F64Div => Self::Arithmetic {
+                    kind: try_arithmetic_from(value)
+                        .ok_or(WatError::invalid_instruction("Arithmetic", value))?,
+                    typ: data_type_of_instruction(value)
+                        .ok_or(WatError::invalid_instruction("Numeric", value))?,
+                },
+                Instruction::I32Eqz
+                | Instruction::I32Eq
+                | Instruction::I32Ne
+                | Instruction::I32LtS
+                | Instruction::I32LtU
+                | Instruction::I32GtS
+                | Instruction::I32GtU
+                | Instruction::I32LeS
+                | Instruction::I32LeU
+                | Instruction::I32GeS
+                | Instruction::I32GeU
+                | Instruction::I64Eqz
+                | Instruction::I64Eq
+                | Instruction::I64Ne
+                | Instruction::I64LtS
+                | Instruction::I64LtU
+                | Instruction::I64GtS
+                | Instruction::I64GtU
+                | Instruction::I64LeS
+                | Instruction::I64LeU
+                | Instruction::I64GeS
+                | Instruction::I64GeU
+                | Instruction::F32Eq
+                | Instruction::F32Ne
+                | Instruction::F32Lt
+                | Instruction::F32Gt
+                | Instruction::F32Le
+                | Instruction::F32Ge
+                | Instruction::F64Eq
+                | Instruction::F64Ne
+                | Instruction::F64Lt
+                | Instruction::F64Gt
+                | Instruction::F64Le
+                | Instruction::F64Ge => Self::Comparison {
+                    kind: try_comparison_from(value)
+                        .ok_or(WatError::invalid_instruction("Comparison", value))?,
+                    typ: data_type_of_instruction(value)
+                        .ok_or(WatError::invalid_instruction("Numeric", value))?,
+                },
+                Instruction::I32Clz
+                | Instruction::I32Ctz
+                | Instruction::I32Popcnt
+                | Instruction::I64Clz
+                | Instruction::I64Ctz
+                | Instruction::I64Popcnt
+                | Instruction::I32And
+                | Instruction::I32Or
+                | Instruction::I32Xor
+                | Instruction::I32Shl
+                | Instruction::I32ShrS
+                | Instruction::I32ShrU
+                | Instruction::I32Rotl
+                | Instruction::I32Rotr
+                | Instruction::I64And
+                | Instruction::I64Or
+                | Instruction::I64Xor
+                | Instruction::I64Shl
+                | Instruction::I64ShrS
+                | Instruction::I64ShrU
+                | Instruction::I64Rotl
+                | Instruction::I64Rotr => Self::Bitwise {
+                    kind: try_bitwise_from(value)
+                        .ok_or(WatError::invalid_instruction("Bitwise", value))?,
+                    is_64_bit: is_64_bit_instruction(value)
+                        .ok_or(WatError::invalid_instruction("32/64 Bit", value))?,
+                },
+                Instruction::F32Abs
+                | Instruction::F32Neg
+                | Instruction::F32Ceil
+                | Instruction::F32Floor
+                | Instruction::F32Trunc
+                | Instruction::F32Nearest
+                | Instruction::F32Sqrt
+                | Instruction::F32Min
+                | Instruction::F32Max
+                | Instruction::F32Copysign
+                | Instruction::F64Abs
+                | Instruction::F64Neg
+                | Instruction::F64Ceil
+                | Instruction::F64Floor
+                | Instruction::F64Trunc
+                | Instruction::F64Nearest
+                | Instruction::F64Sqrt
+                | Instruction::F64Min
+                | Instruction::F64Max
+                | Instruction::F64Copysign => Self::Float {
+                    kind: try_float_op_from(value)
+                        .ok_or(WatError::invalid_instruction("Floating Point", value))?,
+                    is_64_bit: is_64_bit_instruction(value)
+                        .ok_or(WatError::invalid_instruction("32/64 Bit", value))?,
+                },
+                Instruction::I32WrapI64
+                | Instruction::I32TruncF32S
+                | Instruction::I32TruncF32U
+                | Instruction::I32TruncF64S
+                | Instruction::I32TruncF64U
+                | Instruction::I64ExtendI32S
+                | Instruction::I64ExtendI32U
+                | Instruction::I64TruncF32S
+                | Instruction::I64TruncF32U
+                | Instruction::I64TruncF64S
+                | Instruction::I64TruncF64U
+                | Instruction::F32ConvertI32S
+                | Instruction::F32ConvertI32U
+                | Instruction::F32ConvertI64S
+                | Instruction::F32ConvertI64U
+                | Instruction::F32DemoteF64
+                | Instruction::F64ConvertI32S
+                | Instruction::F64ConvertI32U
+                | Instruction::F64ConvertI64S
+                | Instruction::F64ConvertI64U
+                | Instruction::F64PromoteF32
+                | Instruction::I32ReinterpretF32
+                | Instruction::I64ReinterpretF64
+                | Instruction::F32ReinterpretI32
+                | Instruction::F64ReinterpretI64 => Self::Cast(
+                    try_cast_kind_from(value)
+                        .ok_or(WatError::invalid_instruction("Casting", value))?,
+                ),
+                other_instruction => Self::DefaultString(format!("{other_instruction:?}")),
+            })
+        }
+    }
+
+    /// Serialized instructions based on parts of [Instruction],
+    /// but is more generic over types (e.g. a single Add instruction that carries the type).
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+    pub enum OLDSerializedInstruction {
         Unreachable,
         Nop,
         Drop,
@@ -389,7 +1203,7 @@ mod interp {
         DefaultString(String),
     }
 
-    impl SerializedInstruction {
+    impl OLDSerializedInstruction {
         pub fn cf_block_instruction(kind: BlockKind, label: String, inout: InputOutput) -> Self {
             Self::ControlFlow(ControlFlow::Block { label, kind, inout })
         }
@@ -532,20 +1346,21 @@ mod interp {
         }
     }
 
-    impl TryFrom<&Instruction<'_>> for SerializedInstruction {
-        type Error = WastError;
+    impl TryFrom<&Instruction<'_>> for OLDSerializedInstruction {
+        type Error = error::WatError;
 
         fn try_from(value: &Instruction<'_>) -> Result<Self, Self::Error> {
             use ArithmeticOperation as AOp;
             use BitwiseOperation as BOp;
             use ComparisonOperation as COp;
             use FloatOperation as FOp;
+            use OLDSerializedInstruction as SI;
             use SerializableWatType as Type;
-            use SerializedInstruction as SI;
+
             // TODO: Make this a macro to reduce common patterns
             Ok(match value {
                 Instruction::Block(b) => SI::cf_block_instruction(
-                    BlockKind::Regular,
+                    BlockKind::Block,
                     b.label.map(|id| id.name().to_string()).unwrap_or_default(),
                     (&b.ty).try_into()?,
                 ),
@@ -1392,7 +2207,7 @@ mod interp {
         pub(crate) name: Option<String>,
         pub(crate) parameters: Vec<(Option<String>, SerializableWatType)>,
         pub(crate) locals: Vec<(Option<String>, SerializableWatType)>,
-        pub(crate) body: Vec<SerializedInstruction>,
+        pub(crate) body: Vec<OLDSerializedInstruction>,
         pub(crate) result: Vec<SerializableWatType>,
     }
 
@@ -1403,15 +2218,15 @@ mod interp {
     }
 
     impl TryFrom<&Func<'_>> for WastFunc {
-        type Error = WastError;
+        type Error = error::WatError;
 
         fn try_from(value: &Func<'_>) -> Result<Self, Self::Error> {
             let name = value.id.map(|i| i.name().to_string());
-            if value.ty.index.is_some() {
-                return Err(unimplemented_error(
-                    "Index value should not be assigned for functions, I believe",
-                ));
-            }
+            // if value.ty.index.is_some() {
+            //     return Err(unimplemented_error(
+            //         "Index value should not be assigned for functions, I believe",
+            //     ));
+            // }
             let (parameters, result) = match &value.ty.inline {
                 Some(FunctionType { params, results }) => (
                     params
@@ -1420,19 +2235,19 @@ mod interp {
                             Ok(ty) => Ok((p.0.map(|i| i.name().to_string()), ty)),
                             Err(err) => Err(err),
                         })
-                        .collect::<Result<Vec<_>, WastError>>()?,
+                        .collect::<Result<Vec<_>, error::WatError>>()?,
                     results
                         .iter()
                         // TODO: Remove clone for r
                         .map(|r| SerializableWatType::try_from(*r))
-                        .collect::<Result<Vec<_>, WastError>>()?,
+                        .collect::<Result<Vec<_>, error::WatError>>()?,
                 ),
                 None => (Vec::default(), Vec::default()),
             };
             match &value.kind {
-                wast::core::FuncKind::Import(_) => {
-                    Err(unimplemented_error("Import functions are not supported"))
-                }
+                wast::core::FuncKind::Import(_) => Err(error::WatError::unimplemented_error(
+                    "Import functions are not supported",
+                )),
                 wast::core::FuncKind::Inline { locals, expression } => Ok(WastFunc {
                     name,
                     parameters,
@@ -1442,12 +2257,12 @@ mod interp {
                             Ok(ty) => Ok((l.id.map(|i| i.name().to_string()), ty)),
                             Err(err) => Err(err),
                         })
-                        .collect::<Result<Vec<_>, WastError>>()?,
+                        .collect::<Result<Vec<_>, error::WatError>>()?,
                     body: expression
                         .instrs
                         .iter()
-                        .map(|ins| SerializedInstruction::try_from(ins))
-                        .collect::<Result<_, WastError>>()?,
+                        .map(|ins| OLDSerializedInstruction::try_from(ins))
+                        .collect::<Result<_, error::WatError>>()?,
                     result,
                 }),
             }
@@ -1466,7 +2281,7 @@ mod interp {
         name: String,
         typ: SerializableWatType,
         is_mutable: bool,
-        val: Vec<SerializedInstruction>,
+        val: Vec<OLDSerializedInstruction>,
     }
 
     impl GlobalData {
@@ -1474,7 +2289,7 @@ mod interp {
             name: String,
             typ: SerializableWatType,
             is_mutable: bool,
-            val: Vec<SerializedInstruction>,
+            val: Vec<OLDSerializedInstruction>,
         ) -> Self {
             Self {
                 name,
@@ -1539,7 +2354,7 @@ mod interp {
     }
 
     impl InterpreterStructure {
-        pub fn try_new(_text: &str, fields: &[ModuleField], name: &Option<Id>) -> WastResult<Self> {
+        pub fn try_new(_text: &str, fields: &[ModuleField], name: &Option<Id>) -> WatResult<Self> {
             let mut exported = HashMap::new();
             let mut globals = Vec::new();
             let mut memory = Vec::new();
@@ -1573,7 +2388,9 @@ mod interp {
                         }));
                         match &m.kind {
                             wast::core::MemoryKind::Import { import: _, ty: _ } => {
-                                Err(unimplemented_error("Imported memory not yet implemented."))?
+                                Err(error::WatError::unimplemented_error(
+                                    "Imported memory not yet implemented.",
+                                ))?
                             }
                             wast::core::MemoryKind::Normal(mt) => match mt {
                                 wast::core::MemoryType::B32 { limits, shared } => {
@@ -1598,7 +2415,9 @@ mod interp {
                                 }
                             },
                             wast::core::MemoryKind::Inline { is_32: _, data: _ } => {
-                                Err(unimplemented_error("Inline memory not yet implemented."))?
+                                Err(error::WatError::unimplemented_error(
+                                    "Inline memory not yet implemented.",
+                                ))?
                             }
                         }
                     }
@@ -1611,7 +2430,9 @@ mod interp {
                         }));
                         match &g.kind {
                             wast::core::GlobalKind::Import(_) => {
-                                Err(unimplemented_error("Imported globals not yet implemented."))?
+                                Err(error::WatError::unimplemented_error(
+                                    "Imported globals not yet implemented.",
+                                ))?
                             }
                             wast::core::GlobalKind::Inline(e) => {
                                 globals.push(GlobalData::new(
@@ -1684,33 +2505,34 @@ mod interp {
     }
 }
 
-fn create_buffer(text: &str) -> parser::Result<ParseBuffer> {
-    ParseBuffer::new(text)
-}
-
-fn convert_buffer<'a>(buffer: &'a ParseBuffer<'a>) -> parser::Result<Wat<'a>> {
-    parser::parse::<'a, Wat<'a>>(buffer)
-}
-
 #[tauri::command]
 #[specta::specta]
-fn transform(text: &str) -> Result<interp::InterpreterStructure, error::ErrorHolder> {
-    let buf = create_buffer(text)?;
-    let module = convert_buffer(&buf)?;
-    match module {
-        Wat::Module(m) => match &m.kind {
-            wast::core::ModuleKind::Text(fields) => {
-                Ok(interp::InterpreterStructure::try_new(text, fields, &m.id)?)
-            }
-            wast::core::ModuleKind::Binary(_) => Err(error::unimplemented_error(
-                "Unimplemented Error: Cannot binary type currently.",
-            )
-            .into()),
-        },
+fn transform(text: &str) -> error::WatResult<interp::InterpreterStructure> {
+    // Note: New only builds the buffer and is currently infallible
+    let buffer = ParseBuffer::new(text).map_err(WatError::parsing_error)?;
+    // Combined lexing and parsing step
+    let mut module = match parser::parse::<Wat>(&buffer).map_err(WatError::parsing_error)? {
+        Wat::Module(m) => m,
         Wat::Component(_) => {
-            Err(error::unimplemented_error("Cannot compile components currently.").into())
+            return Err(error::WatError::unimplemented_error(
+                "Cannot compile components currently.",
+            ));
         }
-    }
+    };
+    dbg!(&module);
+    let final_result = match module.kind {
+        wast::core::ModuleKind::Text(ref fields) => {
+            interp::InterpreterStructure::try_new(text, &fields, &module.id)
+        }
+        wast::core::ModuleKind::Binary(_) => Err(error::WatError::unimplemented_error(
+            "Unimplemented Error: Cannot binary type currently.",
+        )),
+    };
+    // Resolve and immediately throw-away
+    let _ = module.resolve().map_err(WatError::resolution_error)?;
+    // Print for debug purposes, it does change module, so need to resolve name separately.
+    // println!("{}", wasmprinter::print_bytes(module.encode().unwrap()).unwrap());
+    final_result
 }
 
 fn main() {
