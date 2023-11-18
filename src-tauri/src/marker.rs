@@ -7,19 +7,29 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use wast::core::Instruction;
 
-use crate::error;
+use crate::error::{self, WatError, WatResult};
 
 /// All Wat types that can be (currently) serialized.
 ///
 /// ## Limitations
 /// All except [ValType::Ref] are supported, but must explicity convert.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, derive_more::Display)]
 pub enum SerializableWatType {
     I32,
     I64,
     F32,
     F64,
     V128,
+}
+
+impl SerializableWatType {
+    pub fn try_type_match(&self, other: &SerializableWatType) -> WatResult<()> {
+        if self == other {
+            Ok(())
+        } else {
+            Err(WatError::type_error(self, other))
+        }
+    }
 }
 
 impl<'a> TryFrom<wast::core::ValType<'a>> for SerializableWatType {
@@ -95,41 +105,32 @@ impl ByteKind {
 
 pub fn try_byte_count_from(instruction: &Instruction) -> Option<ByteKind> {
     match instruction {
-        Instruction::I32Load8s(m)
-        | Instruction::I32Store8(m)
-        | Instruction::I64Store8(m)
-        | Instruction::I32Load8u(m)
-        | Instruction::I64Load8s(m)
-        | Instruction::I64Load8u(m) => Some(ByteKind::Bits8),
-        Instruction::I32Store16(m)
-        | Instruction::I64Store16(m)
-        | Instruction::I32Load16s(m)
-        | Instruction::I32Load16u(m)
-        | Instruction::I64Load16s(m)
-        | Instruction::I64Load16u(m) => Some(ByteKind::Bits16),
-        Instruction::I32Load(m)
-        | Instruction::F32Load(m)
-        | Instruction::I64Load32s(m)
-        | Instruction::I64Load32u(m)
-        | Instruction::I32Store(m)
-        | Instruction::F32Store(m)
-        | Instruction::I64Store32(m) => Some(ByteKind::Bits32),
-        Instruction::I64Load(m)
-        | Instruction::F64Load(m)
-        | Instruction::I64Store(m)
-        | Instruction::F64Store(m) => Some(ByteKind::Bits64),
+        Instruction::I32Load8s(_)
+        | Instruction::I32Store8(_)
+        | Instruction::I64Store8(_)
+        | Instruction::I32Load8u(_)
+        | Instruction::I64Load8s(_)
+        | Instruction::I64Load8u(_) => Some(ByteKind::Bits8),
+        Instruction::I32Store16(_)
+        | Instruction::I64Store16(_)
+        | Instruction::I32Load16s(_)
+        | Instruction::I32Load16u(_)
+        | Instruction::I64Load16s(_)
+        | Instruction::I64Load16u(_) => Some(ByteKind::Bits16),
+        Instruction::I32Load(_)
+        | Instruction::F32Load(_)
+        | Instruction::I64Load32s(_)
+        | Instruction::I64Load32u(_)
+        | Instruction::I32Store(_)
+        | Instruction::F32Store(_)
+        | Instruction::I64Store32(_) => Some(ByteKind::Bits32),
+        Instruction::I64Load(_)
+        | Instruction::F64Load(_)
+        | Instruction::I64Store(_)
+        | Instruction::F64Store(_) => Some(ByteKind::Bits64),
         _ => None,
     }
 }
-
-/// The kinds of bits we are observing
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub enum BitType {
-    LeadingZero,
-    TrailingZero,
-    NonZero,
-}
-
 /// Comparison operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum ComparisonOperation {

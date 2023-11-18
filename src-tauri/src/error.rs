@@ -4,6 +4,8 @@ use std::{fmt::Display, ops::Range};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::{marker::SerializableWatType, NumLocationKind};
+
 pub type WatResult<T> = Result<T, WatError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, derive_more::Display)]
@@ -72,6 +74,105 @@ impl WatError {
             span: Some(offset..offset + 1),
             stage: ErrorStage::NameResolving,
             message: Some(value.message()),
+        }
+    }
+
+    pub fn name_resolution_error(name: String, kind: NumLocationKind) -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::NameResolving,
+            message: Some(format!("{kind} {name} not found!")),
+        }
+    }
+
+    pub fn local_resolution_error(name: String) -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::NameResolving,
+            message: Some(format!("Local {name} not found!")),
+        }
+    }
+
+    pub fn type_error(expected: &SerializableWatType, actual: &SerializableWatType) -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::TypeChecking,
+            message: Some(format!("Expected {expected} type but got {actual} type!")),
+        }
+    }
+
+    pub fn setting_immutable_global_error(name: &str) -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::TypeChecking,
+            message: Some(format!("Cannot set immutable Global {name}!")),
+        }
+    }
+
+    pub fn no_instruction_provided(expected_type: &str) -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::TypeChecking,
+            message: Some(format!(
+                "Expected {expected_type} instruction but got nothing!"
+            )),
+        }
+    }
+
+    pub fn non_initializer_expression() -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::TypeChecking,
+            message: Some("Expect a single const expression for initalizing".to_string()),
+        }
+    }
+
+    pub fn empty_stack(expected: usize) -> Self {
+        Self::not_enough_on_stack(expected, 0)
+    }
+    pub fn not_enough_on_stack(expected: usize, actual: usize) -> Self {
+        assert!(actual < expected);
+        match (expected, actual) {
+            (1, 0) => Self {
+                span: None,
+                stage: ErrorStage::TypeChecking,
+                message: Some("Expected at a value on the stack, but nothing is on the stack!".to_string()),
+            },
+            (_, 0) => Self {
+                span: None,
+                stage: ErrorStage::TypeChecking,
+                message: Some(format!("Expected at least {expected} values on the stack, but nothing is on the stack!")),
+            },
+            _ =>  Self {
+                span: None,
+                stage: ErrorStage::TypeChecking,
+                message: Some(format!("Expected at least {expected} values on the stack, but stack only has {actual}!")),
+            },
+        }
+    }
+
+    pub fn mismatched_inout(
+        expected: &Vec<SerializableWatType>,
+        actual: &Vec<SerializableWatType>,
+        is_return: bool,
+    ) -> Self {
+        let expected = expected
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let actual = actual
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        Self {
+            span: None,
+            stage: ErrorStage::TypeChecking,
+            message: Some(format!(
+                "Expected {} types to be [{expected}] on the stack, but stack has [{actual}]!",
+                if is_return { "return" } else { "parameter" }
+            )),
         }
     }
 }
