@@ -13,13 +13,17 @@
     "tauri": "tauri"
   },
   "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^2.5.2",
     "@skeletonlabs/skeleton": "2.5.0",
     "@skeletonlabs/tw-plugin": "0.2.4",
     "@sveltejs/adapter-auto": "^2.0.0",
     "@sveltejs/adapter-static": "^2.0.3",
     "@sveltejs/kit": "^1.27.4",
     "@tauri-apps/cli": "^1.5.6",
+		"@tsconfig/svelte": "^5.0.2",
+    "@types/d3-interpolate": "^3.0.4",
     "@types/node": "20.9.0",
+    "@types/reveal.js": "^4.4.6",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "autoprefixer": "10.4.16",
@@ -27,8 +31,10 @@
     "eslint-config-prettier": "^8.5.0",
     "eslint-plugin-svelte": "^2.30.0",
     "postcss": "8.4.31",
+    "postcss-load-config": "^4.0.1",
     "prettier": "^2.8.0",
     "prettier-plugin-svelte": "^2.10.1",
+    "prettier-plugin-tailwindcss": "^0.5.7",
     "svelte": "^4.0.5",
     "svelte-check": "^3.6.0",
     "tailwindcss": "3.3.5",
@@ -41,6 +47,10 @@
   "dependencies": {
     "@codemirror/lang-wast": "^6.0.1",
     "@tauri-apps/api": "^1.5.1",
-    "svelte-codemirror-editor": "^1.1.0"
+    "svelte-codemirror-editor": "^1.1.0",
+    "@fontsource-variable/jetbrains-mono": "^5.0.18",
+		"@fontsource-variable/manrope": "^5.0.17",
+		"d3-interpolate": "^3.0.1",
+		"reveal.js": "^5.0.2"
   }
 }

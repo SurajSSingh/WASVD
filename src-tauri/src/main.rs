@@ -124,8 +124,8 @@ pub struct MemoryData {
 impl MemoryData {
     pub fn new(
         name: String,
-        min: u64,
-        max: Option<u64>,
+        min: i64,
+        max: Option<i64>,
         is_32: bool,
         is_shared: bool,
         data: Vec<u8>,
@@ -196,8 +196,8 @@ impl InterpreterStructure {
                             wast::core::MemoryType::B32 { limits, shared } => {
                                 memory.push(MemoryData::new(
                                     m.id.map(|id| id.name().to_string()).unwrap_or_default(),
-                                    limits.min as u64,
-                                    limits.max.map(|n| n as u64),
+                                    limits.min as i64,
+                                    limits.max.map(|n| n as i64),
                                     true,
                                     *shared,
                                     Vec::new(),
@@ -206,8 +206,8 @@ impl InterpreterStructure {
                             wast::core::MemoryType::B64 { limits, shared } => {
                                 memory.push(MemoryData::new(
                                     m.id.map(|id| id.name().to_string()).unwrap_or_default(),
-                                    limits.min,
-                                    limits.max,
+                                    limits.min as i64,
+                                    limits.max.map(|i| i as i64),
                                     false,
                                     *shared,
                                     Vec::new(),

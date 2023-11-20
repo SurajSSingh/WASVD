@@ -1,292 +1,1040 @@
 // place files you want to import through the `$lib` alias in this folder.
 import type * as command from "$lib/bindings"
+// import {} from "ts-results"
 
-export function combine_bytes(lower: number, upper:number): bigint | number{
-    if(upper === 0){
-        return lower
+export function deserialize_number(serNumber: command.SerializedNumber): number
+export function deserialize_number(serNumber: command.SerializedNumber & ({typ:"I64"} | {typ:"V128"})): bigint
+export function deserialize_number(serNumber: command.SerializedNumber): bigint | number{
+    const bytes = serNumber.second_bytes ? serNumber.first_bytes.concat(serNumber.second_bytes) :serNumber.first_bytes;
+    const buffer = new ArrayBuffer(8);
+    const view = new DataView(buffer);
+    for (let i = 0; i < bytes.length; i++) {
+        view.setUint8(i, bytes[i]);
+     }
+    if (serNumber.typ === "I64"){
+        return view.getBigInt64(0)
     }
-    return (BigInt(upper) << BigInt(32)) | BigInt(lower);
+    else if (serNumber.typ !== "V128"){
+        switch (serNumber.typ){
+            case "I32":
+                return view.getInt32(0)
+                case "F32":
+                return view.getFloat32(0)
+                case "F64":
+                return view.getFloat64(0)
+        }
+    }
+    return 0
 }
 
 export function instruction_in_plain_english(instruction: command.SerializedInstruction):string {
-    if (typeof instruction === "string"){
-        switch (instruction) {
-            case "Unreachable":
-                return "Unreachable"
-            case "Nop":
-                return "Do nothing"
-            case "Drop":
-                return "Drop the current top value of the stack"
-            case "Return":
-                return "Return immediately"
-            default:
-                return JSON.stringify(instruction);
-        }
-    } else {
-        if("Get" in instruction){
-            return `Get ${instruction.Get.is_local? "local" : "global"} value '${instruction.Get.loc}' and push it on to the stack.`
-        }
-        else if("Set" in instruction){
-            return `Set ${instruction.Set.is_local? "local" : "global"} value '${instruction.Set.loc}' to the current value on the stack`
-        }
-        else if("Tee" in instruction){
 
-            return `Set the local value '${instruction.Tee.loc}' to the current value on the stack and immediately push it back onto the stack.`
+    if ("Simple" in instruction){
+        switch (instruction.Simple) {
+            case "Unreachable":
+                return "Unreachable";
+            case "Nop":
+                return "Do nothing";
+            case "Return":
+                return "Return immediately";
+            case "Drop":
+                return "Drop top value from stack"
+            default:
+                return `UNKNOWN SIMPLE: ${instruction.Simple}`
         }
-        else if ("ControlFlow" in instruction){
-            const cf = instruction.ControlFlow;
-            if("End" in cf){
-                return `End of block ${cf.End.length > 0 ? cf.End : ""}`
+    }else if("Block" in instruction){
+        return `${instruction.Block.kind} ${instruction.Block.label}: ${instruction.Block.inout}`;
+    }
+    else if("Branch" in instruction){
+        if(instruction.Branch.other_labels){
+            return `Branch Table: Cases: ${instruction.Branch.other_labels}, default: ${instruction.Branch.default_label}.`;
+        }
+        return `Branch ${instruction.Branch.is_conditional ? "if value on stack is 0" : "unconditionally"} to ${instruction.Branch.default_label}.`
+    }
+    else if("Call" in instruction){
+        return `Call ${instruction.Call.index} with ${instruction.Call.inout.input || "no input"} from stack, which put back on stack: ${instruction.Call.inout.output || "nothing"}.`
+    }
+    else if("Data" in instruction){
+        switch (instruction.Data.kind) {
+            case "GetLocal":
+                return `Get value from Local variable $${instruction.Data.location} and push it onto stack.`;
+            case "GetGlobal":
+                return `Get value from Global variable $${instruction.Data.location} and push it onto stack.`;
+            case "SetLocal":
+                return `Pop value from stack and set Local variable $${instruction.Data.location} to it.`;
+            case "SetGlobal":
+                return `Pop value from stack and set Global variable $${instruction.Data.location} to it.`;
+            case "TeeLocal":
+                return `Pop value from stack, set Local variable $${instruction.Data.location} to it, then push value back onto stack.`;
+            case "GetMemorySize":
+                return `Push size of memory location $${instruction.Data.location} onto stack.`;
+            case "SetMemorySize":
+                return `Pop value from stack, attempt to grow memory location $${instruction.Data.location} by it, and push old memory size if successful or else -1 to stack.`;
+            default:
+                break;
+        }
+    }
+    else if("Memory" in instruction){
+        if(instruction.Memory.is_storing){
+            return `Storing ${instruction.Memory.count} of ${instruction.Memory.typ} to offset ${instruction.Memory.offset} (alignment: ${instruction.Memory.alignment}) at ${instruction.Memory.location}.`
+        }
+        else{
+            return `Loading from ${instruction.Memory.location} at offset ${instruction.Memory.offset} (alignment: ${instruction.Memory.alignment}) ${instruction.Memory.count} of type ${instruction.Memory.typ}.`
+        }
+    }
+    else if("Const" in instruction){
+        return `Push constant ${deserialize_number(instruction.Const.value)} of type ${instruction.Const.typ} to stack.`
+    }
+    else if("Comparison" in instruction){
+        let signedness = '';
+        let message = '';
+        switch (instruction.Comparison.kind){
+            case "EqualZero":
+                return `Pop ${instruction.Comparison.typ} value from stack, push 1 if value equals 0 otherwise 0.`
+            case "Equal":
+                message = "first value equals second";
+                break;
+                case "NotEqual":
+                message = "first value does not equal second";
+                break;
+                case "LessThenSigned":
+                signedness="signed"
+                message = "first value less than second";
+                break;
+                case "LessThenUnsigned":
+                signedness="unsigned"
+                message = "first value less than second";
+                break;
+                case "GreaterThenSigned":
+                    signedness="signed"
+                message = "first value is greater than second";
+                break;
+                case "GreaterThenUnsigned":
+                    signedness="unsigned"
+                message = "first value is greater than second";
+                break;
+                case "LessThenOrEqualToSigned":
+                    signedness="signed"
+                message = "first value is less than or equals second";
+                break;
+                case "LessThenOrEqualToUnsigned":
+                    signedness="unsigned"
+                message = "first value is less than or equals second";
+                break;
+                case "GreaterThenOrEqualToSigned":
+                    signedness="signed"
+                message = "first value is greater than or equals second";
+                break;
+                case "GreaterThenOrEqualToUnsigned":
+                    signedness="unsigned"
+                message = "first value is greater than or equals second";
+                break;
             }
-            else if("Else" in cf){
-                return `Else ${cf.Else.length > 0 ? `(label: ${cf.Else})` : ""}`
-            }
-            else if("Block" in cf){
-                const block = cf.Block;
-                switch (block.kind) {
-                    case "If":
-                        return `Start new If${" "+block.label}: If current value on stack is zero, run code, else skip to else.`
-                
-                    case "Loop":
-                        return `Start new loop ${block.label}`
-                
-                    case "Regular":
-                        return `Start new block ${block.label}`
-                
-                    default:
-                        return "UNKNOWN BLOCK"
-                }
-            }
-            else if("Branch" in cf){
-                if (cf.Branch.other_labels.length === 0){
-                    return "br_table"
-                }else if (cf.Branch.is_conditional){
-                    return `Jump to ${cf.Branch.default_label} if the value on the stack is not zero.`
-                }
-                else {
-                    return `Jump to ${cf.Branch.default_label}`
-                }
-            }
-            else if("Call" in cf){
-                return `Call function ${cf.Call.index}`
-            }
-        } else if ("Load" in instruction){
-            const load = instruction.Load;
-            return `Load ${load.typ}`
-        } else if ("Store" in instruction){
-            const store = instruction.Store;
-            return `Store ${store.count}`
-        } else if ("Memory" in instruction){
-            const memory = instruction.Memory;
-            if(memory.will_grow){
-                return `Grow memory ${memory.loc} by the current item on the stack and push the old size (success) or -1 (failure) onto the stack.`
-            }
-            return `Push the size of memory ${memory.loc} onto the stack.`
-        } else if ("Const" in instruction){
-            const c = instruction.Const;
-            return `Push value ${combine_bytes(c.lower32bits, c.upper32bits)} of type ${c.typ} to the stack.`
-        } else if ("CountBits" in instruction){
-            return `Count ${instruction.CountBits.bit_to_count} for ${instruction.CountBits.is_64 ? 'i64': 'i32'}`
-        } else if ("NumericOperation" in instruction){
-            const op = instruction.NumericOperation.op;
-            if("Comparison" in op){
-                return `${op.Comparison} for ${instruction.NumericOperation.typ}`
-            } else if ("Arithmetic" in op){
-                return `${op.Arithmetic} for ${instruction.NumericOperation.typ}`
-            } else if ("Bitwise" in op){
-                return `${op.Bitwise} for ${instruction.NumericOperation.typ}`
-            } else if ("Float" in op){
-                return `${op.Float} for ${instruction.NumericOperation.typ}`
-            }
-        } else if ("Cast" in instruction){
-            return `Cast from ${instruction.Cast.from} to ${instruction.Cast.to}${instruction.Cast.is_signed ? ", keeping sign": ", ignoring sign"}`
-        } else if ("Reinterpret" in instruction){
-            return `Reinterpret the ${instruction.Reinterpret.is_64 ? "64-bit" : "32-bit"} ${instruction.Reinterpret.is_int_to_float ? "int as a float" : "float as an int"}`
+            return `Pop top 2 ${signedness} ${instruction.Comparison.typ} values from stack, push 1 if ${message} otherwise push 0.`;
+    }
+    else if("Arithmetic" in instruction){
+        let signedness = '';
+        let operation = '';
+        switch(instruction.Arithmetic.kind){
+            case "Addition":
+                operation='first + second'
+                break;
+            case "Subtraction":
+                operation='first - second'
+                break;
+            case "Multiplication":
+                operation='first * second'
+                break;
+            case "DivisonSigned":
+                signedness='signed'
+                operation='first / second'
+                break;
+            case "DivisonUnsigned":
+                signedness='unsigned'
+                operation='first / second'
+                break;
+            case "RemainderSigned":
+                signedness='signed'
+                operation='first % second'
+                break;
+            case "RemainderUnsigned":
+                signedness='unsigned'
+                operation='first % second'
+                break;
+        }
+        return `Pop top 2 ${signedness} ${instruction.Arithmetic.typ} values from stack, push ${operation} result to stack.`
+    }
+    else if("Bitwise" in instruction){
+        let number_to_pop = 0;
+        let operation = "";
+        switch (instruction.Bitwise.kind) {
+            case "CountLeadingZero":
+                number_to_pop = 1
+                operation = "number of leading zero bits of value"
+                break;
+            case "CountTrailingZero":
+                number_to_pop = 1
+                operation = "number of trailing zero bits of value"
+                break;
+            case "CountNonZero":
+                number_to_pop = 1
+                operation = "number of non-zero bits of value"
+                break;
+            case "And":
+                number_to_pop = 2
+                operation = "bitwise and result of two values"
+                break;
+            case "Or":
+                number_to_pop = 2
+                operation = "bitwise or result of two values"
+                break;
+            case "Xor":
+                number_to_pop = 2
+                operation = "bitwise xor result of two values"
+                break;
+            case "ShiftLeft":
+                number_to_pop = 2
+                operation = "left shift first by second value result"
+                break;
+            case "ShiftRightSigned":
+                number_to_pop = 2
+                operation = "sign preserving right shift first by second values result"
+                break;
+            case "ShiftRightUnsigned":
+                number_to_pop = 2
+                operation = "sign ignoring right shift first by second values result"
+                break;
+            case "RotateLeft":
+                number_to_pop = 2
+                operation = "left bit rotation of first by second values result"
+                break;
+            case "RotateRight":
+                number_to_pop = 2
+                operation = "right bit rotation of first by second values result"
+                break;
+        }
+        return `Pop ${number_to_pop} ${instruction.Bitwise.is_64_bit ? "I64" : "I32"} ${number_to_pop === 1? "value" : "values"} from stack, push ${operation} to stack.`
+    }
+    else if("Float" in instruction){
+        let number_to_pop = 0;
+        let operation = "";
+        switch (instruction.Float.kind) {
+            case "AbsoluteValue":
+                number_to_pop = 1
+                operation = "absolute value of value"
+                break;
+            case "Negation":
+                number_to_pop = 1
+                operation = "negation of value"
+                break;
+            case "Ceiling":
+                number_to_pop = 1
+                operation = "ceiling of value"
+                break;
+            case "Floor":
+                number_to_pop = 1
+                operation = "floor of value"
+                break;
+            case "Truncate":
+                number_to_pop = 1
+                operation = "truncation towards 0 of value"
+                break;
+            case "Nearest":
+                number_to_pop = 1
+                operation = "nearest even integer of value"
+                break;
+            case "SquareRoot":
+                number_to_pop = 1
+                operation = "square root of value"
+                break;
+            case "Minimum":
+                number_to_pop = 2
+                operation = "minimum of the two values"
+                break;
+            case "Maximum":
+                number_to_pop = 2
+                operation = "maximum of the two values"
+                break;
+            case "CopySign":
+                number_to_pop = 2
+                operation = "first value unchanged if values share the same sign else negation of first value"
+                break;
+        }
+        return `Pop top ${number_to_pop} ${instruction.Float.is_64_bit ? "I64" : "I32"} ${number_to_pop === 1? "value" : "values"} from stack, push ${operation} to stack.`
+    }
+    else if("Cast" in instruction){
+        switch(instruction.Cast){
+            case "WrapInt":
+                return "Wrap I64 to I32."
+            case "SignedTruncF32ToI32":
+                return "Truncate an F32 to a signed I32."
+            case "UnsignedTruncF32ToI32":
+                return "Truncate an F32 to an unsigned I32."
+            case "SignedTruncF64ToI32":
+                return "Truncate an F64 to a signed I32."
+            case "UnsignedTruncF64ToI32":
+                return "Truncate an F64 to an unsigned I32."
+            case "SignedTruncF32ToI64":
+                return "Truncate an F32 to a signed I64."
+            case "UnsignedTruncF32ToI64":
+                return "Truncate an F32 to an unsigned I64."
+            case "SignedTruncF64ToI64":
+                return "Truncate an F64 to a signed I64."
+            case "UnsignedTruncF64ToI64":
+                return "Truncate an F64 to an unsigned I64."
+            case "SignedExtend":
+                return "Extend an I32 to a signed I64."
+            case "UnsignedExtend":
+                return "Extend an I32 to an unsigned I64."
+            case "SignedConvertI32ToF32":
+                return "Convert an I32 to a signed F32."
+            case "UnsignedConvertI32ToF32":
+                return "Convert an I32 to an unsigned F32."
+            case "SignedConvertI64ToF32":
+                return "Convert an I64 to a signed F32."
+            case "UnsignedConvertI64ToF32":
+                return "Convert an I64 to an unsigned F32."
+            case "SignedConvertI32ToF64":
+                return "Convert an I32 to a signed F64."
+            case "UnsignedConvertI32ToF64":
+                return "Convert an I32 to an unsigned F64."
+            case "SignedConvertI64ToF64":
+                return "Convert an I64 to a signed F64."
+            case "UnsignedConvertI64ToF64":
+                return "Convert an I64 to an unsigned F64."
+            case "DemoteFloat":
+                return "Demote an F64 to an F32."
+            case "PromoteFloat":
+                return "Promote an F32 to an F64."
+            case "Reinterpret32FToI":
+                return "Reinterpret a 32-bit value from float to int."
+            case "Reinterpret32IToF":
+                return "Reinterpret a 32-bit value from int to float."
+            case "Reinterpret64FToI":
+                return "Reinterpret a 64-bit value from float to int."
+            case "Reinterpret64IToF":
+                return "Reinterpret a 64-bit value from int to float."
         }
     }
     return JSON.stringify(instruction);
 }
 
-export type Error = {
-    message: string,
+export type EvalResult = {
+    action: string,
+    continuation: string|number|null
 }
 
-function unimplementedError(): Error{
-    return {message: "Unimplemented"}
+export type MyError = {
+message: string  
+};
+
+type StackType = (bigint|number)[];
+
+function unimplemented_error(instruction: command.SerializedInstruction):MyError{
+    return {message: `Unimplmented Instruction: ${instruction}`}
 }
 
-function emptyStackError(): Error{
-    return {message: "Nothing is on the stack"}
+function not_enough_stack_error(expected: number, actual: number):MyError{
+    return {message: `Not enough values on stack: expect at least ${expected}, but only got ${actual}`}
 }
 
-// From https://stackoverflow.com/questions/175739/how-can-i-check-if-a-string-is-a-valid-number
-function isNumeric(value: string): boolean{
-    return !isNaN(parseInt(value)) && !isNaN(parseFloat(value))
+function stack_empty_error():MyError{
+    return {message: "Stack is empty"}
 }
 
-export function eval_instruction_single_step(instruction: command.SerializedInstruction, stack: (bigint | number)[], memory: {[key:string]: Uint8Array}, globals: {indexToName: string[], names: {[key:string]: (bigint|number)} }, locals: {indexToName: string[], names: {[key:string]: (bigint|number)}}): "Continue" | "Break" | Error{
-    if(typeof instruction === "string"){
-        switch (instruction) {
+function type_mismatch_error():MyError{
+    return { message: "Types do not match"}
+}
+
+function unreachable_reached_error():MyError{
+    return {message: "Reached an unreachable statement"}
+}
+
+// function unknown_instruction_error(instruction: command.SerializedInstruction):Error{
+//     return {message: `Reached an unknown instruction: ${instruction}`}
+// }
+
+function stack_pop(stack:StackType, amount: number): StackType|MyError{
+    const subStack: StackType = []
+    for (let i = 0; i < amount; i++) {
+        const value = stack.pop();
+        if(value){
+            subStack.push(value)
+        }
+        else if (subStack.length === 0){
+            return stack_empty_error();
+        }
+        else{
+            // Put all values back in stack
+            stack = stack.concat(subStack.reverse());
+            return not_enough_stack_error(amount, subStack.length);
+        }
+    }
+    return subStack;
+}
+
+function math_operation(op: command.ArithmeticOperation | command.BitwiseOperation | command.ComparisonOperation | command.FloatOperation, first: number, second: number):number|MyError
+
+function math_operation(op: command.ArithmeticOperation | command.BitwiseOperation | command.ComparisonOperation, first: bigint, second: bigint):bigint|MyError
+
+function math_operation(op: command.ArithmeticOperation | command.BitwiseOperation | command.ComparisonOperation | command.FloatOperation, first: (bigint| number), second: (bigint| number|undefined)):(bigint| number|MyError)
+
+function math_operation(op: command.ArithmeticOperation | command.BitwiseOperation | command.ComparisonOperation | command.FloatOperation, first: (bigint| number), second: (bigint| number|undefined)):(bigint| number|MyError){
+    // Convert to 0|0n if second is not defined
+    if(typeof second === 'undefined'){
+        second = typeof first === "bigint" ? 0n : 0;
+    }
+    if(typeof first === "bigint" && typeof second === "bigint"){
+        switch (op) {
+            case "Addition":
+                return first + second
+            case "Subtraction":
+                return first - second
+            case "Multiplication":
+                return first * second
+            case "DivisonSigned":
+                return first / second
+            case "DivisonUnsigned":
+                return first / second
+            case "RemainderSigned":
+                return first % second
+            case "RemainderUnsigned":
+                return first % second
+            case "CountLeadingZero":{
+                const notFirst = ~first;
+                return Math.clz32(Number(notFirst & 0xFFFFFFFFn)) + Math.clz32(Number(notFirst >> 32n));
+            }
+            case "CountTrailingZero": {
+                let count = 0;
+                while ((first & 1n) === 0n && first !== 0n) {
+                    first >>= 1n;
+                    count++;
+                }
+                return count;
+            } 
+            case "CountNonZero":{
+                let count = 0;
+                while (first !== 0n) {
+                    if ((first & 1n) === 1n) {
+                        count++;
+                    }
+                    first >>= 1n;
+                }
+                return count;
+            }
+            case "And":
+                return first & second
+            case "Or":
+                return first | second
+            case "Xor":
+                return first ^ second
+            case "ShiftLeft":
+                return first << second
+            case "ShiftRightSigned":
+                return first >> second
+            case "ShiftRightUnsigned":
+                // TODO: See if this is actually correct
+                return first >> second
+            case "RotateLeft": {
+                const mask = (1n << second) - 1n;
+                return ((first << second) | (first >> (32n - second))) & mask;
+            }
+            case "RotateRight":{
+                const mask = (1n << second) - 1n;
+                return ((first >> second) | (first << (32n - second))) & mask;
+            }
+            case "EqualZero":
+                return first === 0n ? 1n : 0n;
+            case "Equal":
+                return first === second ? 1n : 0n;
+            case "NotEqual":
+                return first !== second ? 1n : 0n;
+            case "LessThenSigned":
+                return first < second ? 1n : 0n;
+            case "LessThenUnsigned":
+                return first < second ? 1n : 0n;
+            case "GreaterThenSigned":
+                return first > second ? 1n : 0n;
+            case "GreaterThenUnsigned":
+                return first > second ? 1n : 0n;
+            case "LessThenOrEqualToSigned":
+                return first <= second ? 1n : 0n;
+            case "LessThenOrEqualToUnsigned":
+                return first <= second ? 1n : 0n;
+            case "GreaterThenOrEqualToSigned":
+                return first >= second ? 1n : 0n;
+            case "GreaterThenOrEqualToUnsigned":
+                return first >= second ? 1n : 0n;
+            case "AbsoluteValue":
+            case "Negation":
+            case "Ceiling":
+            case "Floor":
+            case "Truncate":
+            case "Nearest":
+            case "SquareRoot":
+            case "Minimum":
+            case "Maximum":
+            case "CopySign":
+            default:
+                return unreachable_reached_error();
+        }
+    }
+    else if(typeof first === "number" && typeof second === "number"){
+        switch (op) {
+            case "Addition":
+                return first + second
+            case "Subtraction":
+                return first - second
+            case "Multiplication":
+                return first * second
+            case "DivisonSigned":
+                return first / second
+            case "DivisonUnsigned":
+                return Math.abs(first / second)
+            case "RemainderSigned":
+                return first % second
+            case "RemainderUnsigned":
+                return Math.abs(first % second)
+                case "CountLeadingZero":
+                    return Math.clz32(first);
+                case "CountTrailingZero": {
+                    let count = 0;
+                    while ((first & 1) === 0 && first !== 0) {
+                        first >>= 1;
+                        count++;
+                    }
+                    return count;
+                } 
+                case "CountNonZero":{
+                    let count = 0;
+                    while (first !== 0) {
+                        if ((first & 1) === 1) {
+                            count++;
+                        }
+                        first >>= 1;
+                    }
+                    return count;
+                }
+            case "And":
+                return first & second
+            case "Or":
+                return first | second
+            case "Xor":
+                return first ^ second
+            case "ShiftLeft":
+                return first << second
+            case "ShiftRightSigned":
+                return first >> second
+            case "ShiftRightUnsigned":
+                return first >>> second
+            case "RotateLeft": {
+                const mask = (1 << second) - 1;
+                return ((first << second) | (first >>> (32 - second))) & mask;
+            }
+            case "RotateRight":{
+                const mask = (1 << second) - 1;
+                return ((first >>> second) | (first << (32 - second))) & mask;
+            }
+            case "EqualZero":
+                return first === 0 ? 1 : 0;
+            case "Equal":
+                return first === second ? 1 : 0;
+            case "NotEqual":
+                return first !== second ? 1 : 0;
+            case "LessThenSigned":
+                return first < second ? 1 : 0;
+            case "LessThenUnsigned":
+                return first < second ? 1 : 0;
+            case "GreaterThenSigned":
+                return first > second ? 1 : 0;
+            case "GreaterThenUnsigned":
+                return first > second ? 1 : 0;
+            case "LessThenOrEqualToSigned":
+                return first <= second ? 1 : 0;
+            case "LessThenOrEqualToUnsigned":
+                return first <= second ? 1 : 0;
+            case "GreaterThenOrEqualToSigned":
+                return first >= second ? 1 : 0;
+            case "GreaterThenOrEqualToUnsigned":
+                return first >= second ? 1 : 0;
+            case "AbsoluteValue":
+                return Math.abs(first);
+            case "Negation":
+                return -first;
+            case "Ceiling":
+                return Math.ceil(first);
+            case "Floor":
+                return Math.floor(first);
+            case "Truncate":
+                return Math.trunc(first);
+            case "Nearest":
+                return Math.round(first);
+            case "SquareRoot":
+                return Math.sqrt(first);
+            case "Minimum":
+                return Math.min(first, second);
+            case "Maximum":
+                return Math.max(first, second);
+            case "CopySign":
+                return Math.sign(first) === Math.sign(second)? first: -first;
+            default:
+                return unreachable_reached_error();
+        }
+    }
+    return type_mismatch_error();
+}
+
+
+export function eval_single_instruction(instruction: command.SerializedInstruction, stack: StackType):EvalResult|MyError{
+    if ("Simple" in instruction){
+        switch (instruction.Simple) {
             case "Unreachable":
-                return {message: "Reached Unreachable"}
+                return unreachable_reached_error();
             case "Nop":
                 break;
-            case "Drop":
-                stack.pop();
-                break;
             case "Return":
-                return "Break"
+                return {action: instruction_in_plain_english(instruction), continuation: null};
+            case "Drop":
+                stack.pop()
+                break;
+        }
+    }else if("Block" in instruction){
+        return unreachable_reached_error();
+    }
+    else if("Branch" in instruction){
+        if(instruction.Branch.other_labels){
+            return unimplemented_error(instruction);
+        }
+        return unimplemented_error(instruction);
+    }
+    else if("Call" in instruction){
+        return unimplemented_error(instruction);
+    }
+    else if("Data" in instruction){
+        switch (instruction.Data.kind) {
+            case "GetLocal":
+                return unimplemented_error(instruction);
+            case "GetGlobal":
+                return unimplemented_error(instruction);
+            case "SetLocal":
+                return unimplemented_error(instruction);
+            case "SetGlobal":
+                return unimplemented_error(instruction);
+            case "TeeLocal":
+                return unimplemented_error(instruction);
+            case "GetMemorySize":
+                return unimplemented_error(instruction);
+            case "SetMemorySize":
+                return unimplemented_error(instruction);
             default:
-                return {message: `Unknown instruction: ${instruction}`}
+                break;
+        }
     }
-}
-    else {
-        if("Const" in instruction){
-            stack.push(combine_bytes(instruction.Const.lower32bits, instruction.Const.upper32bits));
+    else if("Memory" in instruction){
+        if(instruction.Memory.is_storing){
+            return unimplemented_error(instruction);
         }
-        else if ("Get" in instruction){
-            const env = instruction.Get.is_local ? locals : globals;
-            const value = isNumeric(instruction.Get.loc) ? env.names[env.indexToName[parseInt(instruction.Get.loc)]] : env.names[instruction.Get.loc];
-            if(typeof value === "undefined"){
-                return {message: `${instruction.Get.is_local ? "Local" : "Global"} variable ${instruction.Get.loc} not found`}
-            }
-            stack.push(value);
-            }
-        else if ("Set" in instruction){
-            const value = stack.pop();
-            if(value){
-                const env = instruction.Set.is_local ? locals : globals;
-                if (isNumeric(instruction.Set.loc) && env.names[env.indexToName[parseInt(instruction.Set.loc)]] !== undefined){
-                    env.names[env.indexToName[parseInt(instruction.Set.loc)]] = value;
+        else{
+            return unimplemented_error(instruction);
+        }
+    }
+    else if("Const" in instruction){
+        stack.push(deserialize_number(instruction.Const.value));
+    }
+    else if("Comparison" in instruction){
+        const numbers = stack_pop(stack, 2);
+        if ("message" in numbers){
+            // is Error
+            return numbers;
+        }
+        const [b,a] = numbers;
+        const result = math_operation(instruction.Comparison.kind, a, b);
+        if(typeof result !== 'object'){
+            stack.push(result);
+        }
+        else{
+            // is Error
+            return result;
+        }
+    }
+    else if("Arithmetic" in instruction){
+        const numbers = stack_pop(stack, 2);
+        if ("message" in numbers){
+            // is Error
+            return numbers;
+        }
+        const [b,a] = numbers;
+        const result = math_operation(instruction.Arithmetic.kind, a, b);
+        if(typeof result !== 'object'){
+            stack.push(result);
+        }
+        else{
+            // is Error
+            return result;
+        }
+    }
+    else if("Bitwise" in instruction){
+        switch (instruction.Bitwise.kind) {
+            case "CountLeadingZero":
+            case "CountTrailingZero":
+            case "CountNonZero":{
+                const numbers = stack_pop(stack, 1);
+                if ("message" in numbers){
+                    // is Error
+                    return numbers;
                 }
-                else if (env.names[instruction.Set.loc] !== undefined) {
-                    env.names[instruction.Set.loc] = value;
+                const [a] = numbers;
+                const result = math_operation(instruction.Bitwise.kind, a, instruction.Bitwise.is_64_bit ? 0n : 0);
+                if(typeof result !== 'object'){
+                    stack.push(result);
                 }
-                else {
-                    return {message: `${instruction.Set.is_local ? "Local" : "Global"} variable ${instruction.Set.loc} not found`}
+                else{
+                    // is Error
+                    return result;
                 }
+                break;
             }
-            else {
-                return emptyStackError();
+            case "And":
+            case "Or":
+            case "Xor":
+            case "ShiftLeft":
+            case "ShiftRightSigned":
+            case "ShiftRightUnsigned":
+            case "RotateLeft":
+            case "RotateRight":{
+                const numbers = stack_pop(stack, 2);
+                if ("message" in numbers){
+                    // is Error
+                    return numbers;
+                }
+                const [b,a] = numbers;
+                const result = math_operation(instruction.Bitwise.kind, a, b);
+                if(typeof result !== 'object'){
+                    stack.push(result);
+                }
+                else{
+                    // is Error
+                    return result;
+                }
+                break;
+            }    
+        }
+    }
+    else if("Float" in instruction){
+        switch (instruction.Float.kind) {
+            case "AbsoluteValue":
+            case "Negation":
+            case "Ceiling":
+            case "Floor":
+            case "Truncate":
+            case "Nearest":
+            case "SquareRoot":{
+                const numbers = stack_pop(stack, 1);
+                if ("message" in numbers){
+                    // is Error
+                    return numbers;
+                }
+                const [a] = numbers;
+                const result = math_operation(instruction.Float.kind, a, 0);
+                if(typeof result !== 'object'){
+                    stack.push(result);
+                }
+                else{
+                    // is Error
+                    return result;
+                }
+                break;
+            }
+            case "Minimum":
+            case "Maximum":
+            case "CopySign":{
+                const numbers = stack_pop(stack, 2);
+                if ("message" in numbers){
+                    // is Error
+                    return numbers;
+                }
+                const [b,a] = numbers;
+                const result = math_operation(instruction.Float.kind, a, b);
+                if(typeof result !== 'object'){
+                    stack.push(result);
+                }
+                else{
+                    // is Error
+                    return result;
+                }
+                break;
             }
         }
-        else if ("Tee" in instruction){
-            const value = stack.pop();
-            if(value){
-                if (isNumeric(instruction.Tee.loc) && locals.names[locals.indexToName[parseInt(instruction.Tee.loc)]] !== undefined){
-                    locals.names[locals.indexToName[parseInt(instruction.Tee.loc)]] = value;
-                }
-                else if (locals.names[instruction.Tee.loc] !== undefined) {
-                    locals.names[instruction.Tee.loc] = value;
-                }
-                else {
-                    return {message: `Local variable ${instruction.Tee.loc} not found`}
-                }
-                stack.push(value);
-            }
-            else {
-                return emptyStackError();
-            }
+    }
+    else if("Cast" in instruction){
+        const number = stack_pop(stack, 1);
+        if("message" in number){
+            // is Error
+            return number;
         }
-        else if("Load" in instruction){
-            // const load = instruction.Load;
-            return unimplementedError();
-        }
-        else if("Store" in instruction){
-            // const store = instruction.Store;
-            return unimplementedError();
-        }
-        else if("Memory" in instruction){
-            // const memory = instruction.Memory;
-            return unimplementedError();
-        }
-        else if("CountBits" in instruction){
-            // const count = instruction.CountBits;
-            return unimplementedError();
-        }
-        else if("NumericOperation" in instruction){
-            const op = instruction.NumericOperation.op;
-        if("Comparison" in op){
-            switch (op.Comparison){
-                case "EqualZero":{
-                    const val = stack.pop();
-                    if(val){
-                        stack.push(val === 0 ? 1 : 0)
-                    }
-                    else {
-                        return emptyStackError();
-                    }
+        const n = number[0];
+        if(typeof n === "bigint"){
+            switch(instruction.Cast){
+                case "WrapInt":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setBigInt64(0, n);
+                    stack.push(view.getInt32(0));
+                    break;
+                }          
+                case "SignedConvertI64ToF32":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setBigInt64(0, n);
+                    stack.push(view.getFloat32(0));
+                    break;
+                }   
+                case "UnsignedConvertI64ToF32":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setBigUint64(0, n);
+                    stack.push(view.getFloat32(0));
+                    break;
+                }   
+                case "SignedConvertI64ToF64":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setBigInt64(0, n);
+                    stack.push(view.getFloat64(0));
+                    break;
+                }   
+                case "UnsignedConvertI64ToF64":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setBigUint64(0, n);
+                    stack.push(view.getFloat64(0));
+                    break;
+                }   
+                case "Reinterpret64IToF":{
+                    // 8 bytes for a 64-bit float
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setBigInt64(0, n);
+                    stack.push(view.getFloat64(0));
                     break;
                 }
-
                 default:
-                    break;
-            }
-        } else if ("Arithmetic" in op){
-            switch (op.Arithmetic){
-                case "Addition":
-                    break;
-                default:
-                    break;
-            }
-        } else if ("Bitwise" in op){
-            switch (op.Bitwise){
-                case "And":
-                    break;
-                default:
-                    break;
-            }
-        } else if ("Float" in op){
-            switch (op.Float){
-                case "AbsoluteValue":
-                    break;
-                default:
-                    break;
+                    return unreachable_reached_error()
             }
         }
         else {
-            return {message:"Unknown operation"}
-        }
-
-        }
-        else if("Cast" in instruction){
-            // const cast = instruction.Cast;
-            return unimplementedError();
-        }
-        else if("Reinterpret" in instruction){
-            return unimplementedError();
-        }
-        else if("ControlFlow" in instruction){
-            // const cf = instruction.ControlFlow;
-            return unimplementedError();
-        }
-        else {
-            return {message: `Unknown instruction: ${JSON.stringify(instruction)}`}
+            switch(instruction.Cast){
+                case "SignedTruncF32ToI32":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setFloat32(0, n);
+                    stack.push(view.getInt32(0));
+                    break;
+                } 
+                case "UnsignedTruncF32ToI32":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setFloat32(0, n);
+                    stack.push(view.getUint32(0));
+                    break;
+                } 
+                case "SignedTruncF32ToI64":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setFloat32(0, n);
+                    stack.push(view.getBigInt64(0));
+                    break;
+                } 
+                case "UnsignedTruncF32ToI64":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setFloat32(0, n);
+                    stack.push(view.getUint32(0));
+                    break;
+                } 
+                case "SignedTruncF64ToI64":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setFloat64(0, n);
+                    stack.push(view.getInt32(0));
+                    break;
+                } 
+                case "UnsignedTruncF64ToI64":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setFloat64(0, n);
+                    stack.push(view.getUint32(0));
+                    break;
+                } 
+                case "SignedTruncF64ToI32":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setFloat64(0, n);
+                    stack.push(view.getBigInt64(0));
+                    break;
+                } 
+                case "UnsignedTruncF64ToI32":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setFloat64(0, n);
+                    stack.push(view.getUint32(0));
+                    break;
+                } 
+                case "SignedExtend":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setInt32(0, n);
+                    stack.push(view.getBigInt64(0));
+                    break;
+                } 
+                case "UnsignedExtend":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setUint32(0, n);
+                    stack.push(view.getBigUint64(0));
+                    break;
+                } 
+                case "SignedConvertI32ToF32":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setInt32(0, n);
+                    stack.push(view.getFloat32(0));
+                    break;
+                } 
+                case "UnsignedConvertI32ToF32":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setUint32(0, n);
+                    stack.push(view.getFloat32(0));
+                    break;
+                } 
+                case "SignedConvertI32ToF64":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setInt32(0, n);
+                    stack.push(view.getFloat64(0));
+                    break;
+                } 
+                case "UnsignedConvertI32ToF64":{
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setUint32(0, n);
+                    stack.push(view.getFloat64(0));
+                    break;
+                } 
+                case "DemoteFloat": {
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setFloat64(0, n);
+                    stack.push(view.getFloat32(0));
+                    break;
+                }
+                case "PromoteFloat": {
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setFloat32(0, n);
+                    stack.push(view.getFloat64(0));
+                    break;
+                }
+                case "Reinterpret32FToI": {
+                    // 4 bytes for a 32-bit int
+                    const buffer = new ArrayBuffer(4);
+                    const view = new DataView(buffer);
+                    view.setFloat32(0, n);
+                    stack.push(view.getInt32(0));
+                    break;
+                }
+                case "Reinterpret32IToF":{
+                    // 4 bytes for a 32-bit float
+                    const buffer = new ArrayBuffer(4);
+                    const view = new DataView(buffer);
+                    view.setInt32(0, n);
+                    stack.push(view.getFloat32(0));
+                    break;
+                }
+                case "Reinterpret64FToI":{
+                    // 8 bytes for a 64-bit int
+                    const buffer = new ArrayBuffer(8);
+                    const view = new DataView(buffer);
+                    view.setFloat64(0, n);
+                    stack.push(view.getBigInt64(0));
+                    break;
+                }
+                    
+                default:
+                    return unreachable_reached_error();
+            }
         }
     }
-    return "Continue";
+    return {action: instruction_in_plain_english(instruction), continuation: ""}
+}
+
+export function* eval_instruction_node(node: command.SerializedInstructionNode, stack: (bigint|number)[]):Generator<EvalResult|MyError, null|MyError> {
+    let yieldableNodes;
+    if("NonBlock" in node){
+        yield eval_single_instruction(node.NonBlock, stack)
+    } 
+    else if ("SingleBlock" in node) {
+        yieldableNodes = node.SingleBlock.inner_nodes;
+        // for (const instruction of node.SingleBlock.inner_nodes) {
+        //     yield* eval_instruction_node(instruction, stack)
+        // }
+    }
+    else if ("ConditionalBlock" in node) {
+        const popped = stack_pop(stack, 1);
+        if("message" in popped){
+            return stack_empty_error()
+        }
+        const [conditionalValue] = popped;
+        yieldableNodes = (typeof conditionalValue === "number" && conditionalValue !== 0) 
+                      || (typeof conditionalValue === "bigint" && conditionalValue !== 0n) 
+                      ? node.ConditionalBlock.then_nodes
+                      : node.ConditionalBlock.else_nodes;
+        // if((typeof conditionalValue === "number" && conditionalValue !== 0) 
+        // || (typeof conditionalValue === "bigint" && conditionalValue !== BigInt(0))){
+        //     for (const instruction of node.ConditionalBlock.then_nodes) {
+        //         yield* eval_instruction_node(instruction, stack)
+        //     }
+        // }
+        // else {
+        //     for (const instruction of node.ConditionalBlock.else_nodes) {
+        //         yield* eval_instruction_node(instruction, stack)
+        //     }
+        // }
+    }
+    if(yieldableNodes){
+        for (const instruction of yieldableNodes) 
+        {
+            yield* eval_instruction_node(instruction, stack);
+        }
+    }
+    return null;
 }
 
 
-//string[] | Error
-/**
- * Evaluation function generator of a list of instructions, yielding at every step
- * @param instructions List of instructions to evaluate
- * @param env The full environmnent (including globals and parameters)
- * @param localNames Names of local variables (initialized to default values)
- * @returns A list of results or an error with message
- */
-export function* eval_instructions(instructions: command.SerializedInstruction[], memory: {[key:string]: Uint8Array}, globals: {indexToName: string[], names: {[key:string]: (bigint|number)} }, locals: {indexToName: string[], names: {[key:string]: (bigint|number)}}){    
+export function exec_instructions(tree: command.SerializedInstructionTree):{result: EvalResult; previous: (number | bigint)[]; current: (number | bigint)[];}[]|MyError{
     const stack: (bigint|number)[] = [];
-    for (const instruction of instructions) {
-        const res = eval_instruction_single_step(instruction, stack, memory, globals, locals);
-        if (typeof res === "object"){
-            return res;
+    const final: {
+        result: EvalResult;
+        previous: (number | bigint)[];
+        current: (number | bigint)[];
+    }[] = [];
+    for (const node of tree.root) {
+        // console.log(JSON.stringify(node))
+        let previousStack = structuredClone(stack);
+        topLoop: for (const action of eval_instruction_node(node,stack)){
+            if("message" in action){
+                return action;
+            }
+            final.push({result: action, previous:previousStack, current:structuredClone(stack)})
+            previousStack = structuredClone(stack);
+            if(action.continuation === null){
+                // Null continuation means immediate return
+                break topLoop;
+            }
+            // console.log("RESULT: ", result);
         }
-        else if (res === "Break"){
-            break;
-        }
-        yield {instructions, res, stack, memory, globals, locals}
     }
-    return stack.map((v) => v.toString());
+    return final;
 }
+

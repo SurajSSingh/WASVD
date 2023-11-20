@@ -67,6 +67,10 @@ export type NumLocationKind = "Function" | "Global" | "Memory"
  */
 export type NumericConversionKind = "WrapInt" | "SignedTruncF32ToI32" | "UnsignedTruncF32ToI32" | "SignedTruncF64ToI32" | "UnsignedTruncF64ToI32" | "SignedTruncF32ToI64" | "UnsignedTruncF32ToI64" | "SignedTruncF64ToI64" | "UnsignedTruncF64ToI64" | "SignedExtend" | "UnsignedExtend" | "SignedConvertI32ToF32" | "UnsignedConvertI32ToF32" | "SignedConvertI64ToF32" | "UnsignedConvertI64ToF32" | "SignedConvertI32ToF64" | "UnsignedConvertI32ToF64" | "SignedConvertI64ToF64" | "UnsignedConvertI64ToF64" | "DemoteFloat" | "PromoteFloat" | "Reinterpret32FToI" | "Reinterpret32IToF" | "Reinterpret64FToI" | "Reinterpret64IToF"
 /**
+ * A number serialized as an array of bytes in big-endian order.
+ */
+export type SerializedNumber = { first_bytes: number[]; second_bytes: number[] | null; typ: SerializableWatType }
+/**
  * Represents input and output of a block of instructions.
  * For functions, inputs are parameters and outputs are results.
  */
@@ -76,7 +80,6 @@ export type InterpreterStructure = { name: string; exported: { [key: string]: [N
  * Simple Instructions
  */
 export type SimpleInstruction = "Unreachable" | "Nop" | "Drop" | "Return"
-export type SerializedNumber = { lower_bits: number; upper_bits: number }
 /**
  * Control flow instructions
  */

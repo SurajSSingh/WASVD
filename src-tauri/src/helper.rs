@@ -2,56 +2,44 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use wast::token::{Float32, Float64};
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize, Type,
-)]
-pub struct SerializedNumber {
-    lower_bits: u32,
-    upper_bits: u32,
+use crate::marker::SerializableWatType;
+
+macro_rules! four_byte_array {
+    ($array:ident, $start:literal) => {
+        [
+            $array[$start],
+            $array[$start + 1],
+            $array[$start + 2],
+            $array[$start + 3],
+        ]
+    };
 }
 
-impl From<u32> for SerializedNumber {
-    fn from(value: u32) -> Self {
-        Self {
-            lower_bits: u32::from_ne_bytes(value.to_ne_bytes()),
-            upper_bits: 0,
-        }
-    }
+/// A number serialized as an array of bytes in big-endian order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct SerializedNumber {
+    first_bytes: [u8; 4],
+    second_bytes: Option<[u8; 4]>,
+    typ: SerializableWatType,
 }
 
 impl From<i32> for SerializedNumber {
     fn from(value: i32) -> Self {
         Self {
-            lower_bits: u32::from_ne_bytes(value.to_ne_bytes()),
-            upper_bits: 0,
-        }
-    }
-}
-
-impl From<u64> for SerializedNumber {
-    fn from(value: u64) -> Self {
-        let bytes = value.to_ne_bytes();
-        let (lower, upper) = (
-            [bytes[0], bytes[1], bytes[2], bytes[3]],
-            [bytes[4], bytes[5], bytes[6], bytes[7]],
-        );
-        Self {
-            lower_bits: u32::from_ne_bytes(lower),
-            upper_bits: u32::from_ne_bytes(upper),
+            first_bytes: value.to_be_bytes(),
+            second_bytes: None,
+            typ: SerializableWatType::I32,
         }
     }
 }
 
 impl From<i64> for SerializedNumber {
     fn from(value: i64) -> Self {
-        let bytes = value.to_ne_bytes();
-        let (lower, upper) = (
-            [bytes[0], bytes[1], bytes[2], bytes[3]],
-            [bytes[4], bytes[5], bytes[6], bytes[7]],
-        );
+        let bytes = value.to_be_bytes();
         Self {
-            lower_bits: u32::from_ne_bytes(lower),
-            upper_bits: u32::from_ne_bytes(upper),
+            first_bytes: four_byte_array!(bytes, 0),
+            second_bytes: Some(four_byte_array!(bytes, 4)),
+            typ: SerializableWatType::I64,
         }
     }
 }
@@ -59,8 +47,9 @@ impl From<i64> for SerializedNumber {
 impl From<Float32> for SerializedNumber {
     fn from(value: Float32) -> Self {
         Self {
-            lower_bits: u32::from_ne_bytes(value.bits.to_ne_bytes()),
-            upper_bits: 0,
+            first_bytes: value.bits.to_be_bytes(),
+            second_bytes: None,
+            typ: SerializableWatType::F32,
         }
     }
 }
@@ -68,13 +57,10 @@ impl From<Float32> for SerializedNumber {
 impl From<Float64> for SerializedNumber {
     fn from(value: Float64) -> Self {
         let bytes = value.bits.to_ne_bytes();
-        let (lower, upper) = (
-            [bytes[0], bytes[1], bytes[2], bytes[3]],
-            [bytes[4], bytes[5], bytes[6], bytes[7]],
-        );
         Self {
-            lower_bits: u32::from_ne_bytes(lower),
-            upper_bits: u32::from_ne_bytes(upper),
+            first_bytes: four_byte_array!(bytes, 0),
+            second_bytes: Some(four_byte_array!(bytes, 4)),
+            typ: SerializableWatType::F64,
         }
     }
 }
@@ -84,7 +70,7 @@ where
     SerializedNumber: From<T>,
 {
     fn from(value: Option<T>) -> Self {
-        value.map(SerializedNumber::from).unwrap_or_default()
+        value.map(SerializedNumber::from).unwrap_or(0.into())
     }
 }
 
