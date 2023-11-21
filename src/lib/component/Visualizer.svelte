@@ -1,7 +1,8 @@
 <script lang="ts">
     import { onMount } from 'svelte';
 	import { Presentation, Slide } from '$lib/animotion/components';
-	import { exec_instructions, type EvalResult, type MyError, deserialize_number } from '$lib';
+	import { deserialize_number } from '$lib';
+	import { exec_instructions, type EvalResult, type MyError } from '$lib/interpreter';
     import type * as command from '$lib/bindings';
     import { watStructure } from "$lib/store";
 
