@@ -19,7 +19,7 @@
 		(await import('reveal.js/dist/reveal.css'));
 		(await import('$lib/animotion/styles/theme.css'));
 		(await import('$lib/animotion/styles/code.css'));
-
+		
 		// create deck instance
 		const deck = new Reveal(options)
 
@@ -29,6 +29,7 @@
 
 		// keep track of current slide
 		deck.on('slidechanged', (event) => {
+			console.log("SLIDE CHANGED");
 			if ('currentSlide' in event) {
 				const currentSlideEl = event.currentSlide as HTMLElement
 				currentSlideEl.dispatchEvent(inEvent)
@@ -41,6 +42,7 @@
 		})
 
 		deck.on('fragmentshown', (event) => {
+			console.log("FRAGMENT SHOWN");
 			if ('fragment' in event) {
 				const fragmentEl = event.fragment as HTMLElement
 				fragmentEl.dispatchEvent(inEvent)
@@ -48,6 +50,7 @@
 		})
 
 		deck.on('fragmenthidden', (event) => {
+			console.log("FRAGMENT HIDDEN");
 			if ('fragment' in event) {
 				const fragmentEl = event.fragment as HTMLElement
 				fragmentEl.dispatchEvent(outEvent)
@@ -55,6 +58,7 @@
 		})
 
 		deck.initialize().then(() => {
+			console.log("INITIALIZED");
 			// we pass the language to the `<Code>` block
 			// and higlight code blocks after initialization
 			highlightCodeBlocks(deck)
@@ -85,7 +89,7 @@
 	}
 </script>
 
-<div class="reveal">
+<div class="h-1/2 relative overflow-hidden touch-pinch-zoom reveal">
 	<div class="slides">
 		<slot />
 	</div>

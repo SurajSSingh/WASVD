@@ -17,8 +17,8 @@ const options: Reveal.Options = {
 	// content padding
 	margin: 0.04,
 	// smallest and largest possible scale
-	minScale: 0.2,
-	maxScale: 2.0,
+	minScale: 0.1,
+	maxScale: 1.0,
 	// plugins
 	plugins: [Markdown, Highlight, Math.KaTeX, Notes],
 	// syntax highlight options
@@ -30,12 +30,13 @@ const options: Reveal.Options = {
 	},
 	// slide controls
 	controls: true,
+	controlsLayout: "edges",
 	// slide progress bar
 	progress: true,
 	// slide transition
 	transition: 'slide',
 	// bring your own layout
-	disableLayout: false,
+	disableLayout: true,
 	// display mode used to show slides
 	display: 'block',
 	// center slides on the screen
