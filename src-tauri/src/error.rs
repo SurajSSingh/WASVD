@@ -160,8 +160,8 @@ impl WatError {
     }
 
     pub fn mismatched_inout(
-        expected: &Vec<SerializableWatType>,
-        actual: &Vec<SerializableWatType>,
+        expected: &[SerializableWatType],
+        actual: &[SerializableWatType],
         is_return: bool,
     ) -> Self {
         let expected = expected
@@ -206,9 +206,7 @@ impl WatError {
         Self {
             span: None,
             stage: ErrorStage::TypeChecking,
-            message: Some(format!(
-                "An else block should only follow after an if block."
-            )),
+            message: Some("An else block should only follow after an if block.".to_string()),
         }
     }
 

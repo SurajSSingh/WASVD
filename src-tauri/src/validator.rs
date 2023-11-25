@@ -14,7 +14,7 @@ use crate::{
 /// Try to convert a name to a [usize] index,
 /// returning Ok(index) | Err(orignal name)
 pub fn try_name_to_index(name: &str) -> Result<usize, &str> {
-    str::parse::<usize>(&name).map_err(|_err| name)
+    str::parse::<usize>(name).map_err(|_err| name)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -213,7 +213,7 @@ impl Validator {
         output: Vec<SerializableWatType>,
     ) {
         let frame = ControlFrame {
-            opcode: opcode,
+            opcode,
             label: if label.is_empty() {
                 None
             } else {
@@ -265,7 +265,10 @@ impl Validator {
     ) -> WatResult<()> {
         match instruction {
             SerializedInstruction::Simple(s) => match s {
-                SimpleInstruction::Unreachable => Ok(self.unreachable()),
+                SimpleInstruction::Unreachable => {
+                    self.unreachable();
+                    Ok(())
+                }
                 SimpleInstruction::Nop => Ok(()),
                 SimpleInstruction::Drop => {
                     self.pop_val()?;
@@ -281,27 +284,31 @@ impl Validator {
                     // SAFETY: Block is always gaurenteed to have an input-output section
                     let input = &inout.as_ref().unwrap().get_input_types();
                     let output = &inout.as_ref().unwrap().output;
-                    self.pop_vals(&input)?;
-                    Ok(self.push_control(*kind, label, input.to_vec(), output.to_vec()))
+                    self.pop_vals(input)?;
+                    self.push_control(*kind, label, input.to_vec(), output.to_vec());
+                    Ok(())
                 }
                 marker::BlockKind::If => {
                     // SAFETY: Block is always gaurenteed to have an input-output section
                     let input = &inout.as_ref().unwrap().get_input_types();
                     let output = &inout.as_ref().unwrap().output;
                     self.expected_pop_val(&SerializableWatType::I32)?;
-                    self.pop_vals(&input)?;
-                    Ok(self.push_control(*kind, label, input.to_vec(), output.to_vec()))
+                    self.pop_vals(input)?;
+                    self.push_control(*kind, label, input.to_vec(), output.to_vec());
+                    Ok(())
                 }
                 marker::BlockKind::Else => {
                     let frame = self.pop_control()?;
                     if !frame.is_if() {
                         return Err(WatError::else_without_if_error());
                     }
-                    Ok(self.push_control(*kind, label, frame.start_types, frame.end_types))
+                    self.push_control(*kind, label, frame.start_types, frame.end_types);
+                    Ok(())
                 }
                 marker::BlockKind::End => {
                     let frame = self.pop_control()?;
-                    Ok(self.push_vals(&frame.end_types))
+                    self.push_vals(&frame.end_types);
+                    Ok(())
                 }
             },
             SerializedInstruction::Branch {
@@ -315,10 +322,12 @@ impl Validator {
                     if *is_conditional {
                         self.expected_pop_val(&SerializableWatType::I32)?;
                         self.pop_vals(&default_vals)?;
-                        Ok(self.push_vals(&default_vals))
+                        self.push_vals(&default_vals);
+                        Ok(())
                     } else {
                         self.pop_vals(&default_vals)?;
-                        Ok(self.unreachable())
+                        self.unreachable();
+                        Ok(())
                     }
                 } else {
                     self.expected_pop_val(&SerializableWatType::I32)?;
@@ -330,35 +339,40 @@ impl Validator {
                             return Err(WatError::mismatched_inout(&default_vals, &vals, false));
                         }
                         let popped = &self.pop_vals(&vals)?;
-                        Ok(self.push_vals(&popped))
+                        self.push_vals(popped);
+                        Ok(())
                     })?;
                     self.pop_vals(&default_vals)?;
-                    Ok(self.unreachable())
+                    self.unreachable();
+                    Ok(())
                 }
             }
             SerializedInstruction::Call { index, inout } => {
-                if self.functions.get(&index).is_some() {
+                if self.functions.get(index).is_some() {
                     // Assumes success on the called function
                     self.pop_vals(&inout.get_input_types())?;
-                    Ok(self.push_vals(&inout.output))
+                    self.push_vals(&inout.output);
+                    Ok(())
                 } else {
                     Err(WatError::name_resolution_error(
-                        &index,
+                        index,
                         crate::NumLocationKind::Function,
                     ))
                 }
             }
             SerializedInstruction::Data { kind, location } => match kind {
                 marker::DataInstruction::GetLocal => {
-                    if let Some(typ) = locals.get(&location) {
-                        Ok(self.push_val(*typ))
+                    if let Some(typ) = locals.get(location) {
+                        self.push_val(*typ);
+                        Ok(())
                     } else {
                         Err(WatError::local_resolution_error(location))
                     }
                 }
                 marker::DataInstruction::GetGlobal => {
-                    if let Some((_, typ)) = self.globals.get(&location) {
-                        Ok(self.push_val(*typ))
+                    if let Some((_, typ)) = self.globals.get(location) {
+                        self.push_val(*typ);
+                        Ok(())
                     } else {
                         Err(WatError::name_resolution_error(
                             location,
@@ -367,7 +381,7 @@ impl Validator {
                     }
                 }
                 marker::DataInstruction::SetLocal => {
-                    if let Some(typ) = locals.get(&location) {
+                    if let Some(typ) = locals.get(location) {
                         self.expected_pop_val(typ)?;
                         Ok(())
                     } else {
@@ -375,7 +389,7 @@ impl Validator {
                     }
                 }
                 marker::DataInstruction::SetGlobal => {
-                    let Some((mutable, typ)) = self.globals.get(&location).cloned() else {
+                    let Some((mutable, typ)) = self.globals.get(location).cloned() else {
                         return Err(WatError::name_resolution_error(
                             location,
                             crate::NumLocationKind::Global,
@@ -385,20 +399,22 @@ impl Validator {
                         self.expected_pop_val(&typ)?;
                         Ok(())
                     } else {
-                        Err(WatError::setting_immutable_global_error(&location))
+                        Err(WatError::setting_immutable_global_error(location))
                     }
                 }
                 marker::DataInstruction::TeeLocal => {
-                    if let Some(typ) = locals.get(&location) {
+                    if let Some(typ) = locals.get(location) {
                         self.expected_pop_val(typ)?;
-                        Ok(self.push_val(*typ))
+                        self.push_val(*typ);
+                        Ok(())
                     } else {
                         Err(WatError::local_resolution_error(location))
                     }
                 }
                 marker::DataInstruction::GetMemorySize => {
                     if self.memory_names.contains(location) {
-                        Ok(self.push_val(SerializableWatType::I32))
+                        self.push_val(SerializableWatType::I32);
+                        Ok(())
                     } else {
                         Err(WatError::name_resolution_error(
                             location,
@@ -410,7 +426,8 @@ impl Validator {
                 marker::DataInstruction::SetMemorySize => {
                     if self.memory_names.contains(location) {
                         self.expected_pop_val(&SerializableWatType::I32)?;
-                        Ok(self.push_val(SerializableWatType::I32))
+                        self.push_val(SerializableWatType::I32);
+                        Ok(())
                     } else {
                         Err(WatError::name_resolution_error(
                             location,
@@ -427,12 +444,13 @@ impl Validator {
             } => {
                 if self.memory_names.contains(location) {
                     if *is_storing {
-                        self.expected_pop_val(&typ)?;
+                        self.expected_pop_val(typ)?;
                         self.expected_pop_val(&SerializableWatType::I32)?;
                         Ok(())
                     } else {
                         self.expected_pop_val(&SerializableWatType::I32)?;
-                        Ok(self.push_val(*typ))
+                        self.push_val(*typ);
+                        Ok(())
                     }
                 } else {
                     Err(WatError::name_resolution_error(
@@ -441,19 +459,25 @@ impl Validator {
                     ))
                 }
             }
-            SerializedInstruction::Const { typ, .. } => Ok(self.push_val(*typ)),
-            SerializedInstruction::Arithmetic { typ, kind } => {
+            SerializedInstruction::Const { typ, .. } => {
+                self.push_val(*typ);
+                Ok(())
+            }
+            SerializedInstruction::Arithmetic { typ, kind: _ } => {
                 self.expected_pop_val(typ)?;
                 self.expected_pop_val(typ)?;
-                Ok(self.push_val(*typ))
+                self.push_val(*typ);
+                Ok(())
             }
             SerializedInstruction::Comparison { typ, kind } => {
                 if matches!(kind, crate::marker::ComparisonOperation::EqualZero) {
-                    Ok(self.push_val(SerializableWatType::I32))
+                    self.push_val(SerializableWatType::I32);
+                    Ok(())
                 } else {
                     self.expected_pop_val(typ)?;
                     self.expected_pop_val(typ)?;
-                    Ok(self.push_val(SerializableWatType::I32))
+                    self.push_val(SerializableWatType::I32);
+                    Ok(())
                 }
             }
             SerializedInstruction::Bitwise { kind, is_64_bit } => {
@@ -469,11 +493,13 @@ impl Validator {
                         | crate::marker::BitwiseOperation::CountNonZero
                 ) {
                     self.expected_pop_val(&typ)?;
-                    Ok(self.push_val(typ))
+                    self.push_val(typ);
+                    Ok(())
                 } else {
                     self.expected_pop_val(&typ)?;
                     self.expected_pop_val(&typ)?;
-                    Ok(self.push_val(typ))
+                    self.push_val(typ);
+                    Ok(())
                 }
             }
             SerializedInstruction::Float { kind, is_64_bit } => {
@@ -490,85 +516,103 @@ impl Validator {
                 ) {
                     self.expected_pop_val(&typ)?;
                     self.expected_pop_val(&typ)?;
-                    Ok(self.push_val(typ))
+                    self.push_val(typ);
+                    Ok(())
                 } else {
                     self.expected_pop_val(&typ)?;
-                    Ok(self.push_val(typ))
+                    self.push_val(typ);
+                    Ok(())
                 }
             }
             SerializedInstruction::Conversion(c) => match c {
                 marker::NumericConversionKind::WrapInt => {
                     self.expected_pop_val(&SerializableWatType::I64)?;
-                    Ok(self.push_val(SerializableWatType::I32))
+                    self.push_val(SerializableWatType::I32);
+                    Ok(())
                 }
                 marker::NumericConversionKind::SignedTruncF32ToI32
                 | marker::NumericConversionKind::UnsignedTruncF32ToI32 => {
                     self.expected_pop_val(&SerializableWatType::F32)?;
-                    Ok(self.push_val(SerializableWatType::I32))
+                    self.push_val(SerializableWatType::I32);
+                    Ok(())
                 }
                 marker::NumericConversionKind::SignedTruncF64ToI32
                 | marker::NumericConversionKind::UnsignedTruncF64ToI32 => {
                     self.expected_pop_val(&SerializableWatType::F64)?;
-                    Ok(self.push_val(SerializableWatType::I32))
+                    self.push_val(SerializableWatType::I32);
+                    Ok(())
                 }
                 marker::NumericConversionKind::SignedTruncF32ToI64
                 | marker::NumericConversionKind::UnsignedTruncF32ToI64 => {
                     self.expected_pop_val(&SerializableWatType::F32)?;
-                    Ok(self.push_val(SerializableWatType::I64))
+                    self.push_val(SerializableWatType::I64);
+                    Ok(())
                 }
                 marker::NumericConversionKind::SignedTruncF64ToI64
                 | marker::NumericConversionKind::UnsignedTruncF64ToI64 => {
                     self.expected_pop_val(&SerializableWatType::F64)?;
-                    Ok(self.push_val(SerializableWatType::I64))
+                    self.push_val(SerializableWatType::I64);
+                    Ok(())
                 }
                 marker::NumericConversionKind::SignedExtend
                 | marker::NumericConversionKind::UnsignedExtend => {
                     self.expected_pop_val(&SerializableWatType::I32)?;
-                    Ok(self.push_val(SerializableWatType::I64))
+                    self.push_val(SerializableWatType::I64);
+                    Ok(())
                 }
                 marker::NumericConversionKind::SignedConvertI32ToF32
                 | marker::NumericConversionKind::UnsignedConvertI32ToF32 => {
                     self.expected_pop_val(&SerializableWatType::I32)?;
-                    Ok(self.push_val(SerializableWatType::F32))
+                    self.push_val(SerializableWatType::F32);
+                    Ok(())
                 }
                 marker::NumericConversionKind::SignedConvertI64ToF32
                 | marker::NumericConversionKind::UnsignedConvertI64ToF32 => {
                     self.expected_pop_val(&SerializableWatType::I64)?;
-                    Ok(self.push_val(SerializableWatType::F32))
+                    self.push_val(SerializableWatType::F32);
+                    Ok(())
                 }
                 marker::NumericConversionKind::SignedConvertI32ToF64
                 | marker::NumericConversionKind::UnsignedConvertI32ToF64 => {
                     self.expected_pop_val(&SerializableWatType::I32)?;
-                    Ok(self.push_val(SerializableWatType::F64))
+                    self.push_val(SerializableWatType::F64);
+                    Ok(())
                 }
                 marker::NumericConversionKind::SignedConvertI64ToF64
                 | marker::NumericConversionKind::UnsignedConvertI64ToF64 => {
                     self.expected_pop_val(&SerializableWatType::I64)?;
-                    Ok(self.push_val(SerializableWatType::F64))
+                    self.push_val(SerializableWatType::F64);
+                    Ok(())
                 }
                 marker::NumericConversionKind::DemoteFloat => {
                     self.expected_pop_val(&SerializableWatType::F64)?;
-                    Ok(self.push_val(SerializableWatType::F32))
+                    self.push_val(SerializableWatType::F32);
+                    Ok(())
                 }
                 marker::NumericConversionKind::PromoteFloat => {
                     self.expected_pop_val(&SerializableWatType::F32)?;
-                    Ok(self.push_val(SerializableWatType::F64))
+                    self.push_val(SerializableWatType::F64);
+                    Ok(())
                 }
                 marker::NumericConversionKind::Reinterpret32FToI => {
                     self.expected_pop_val(&SerializableWatType::F32)?;
-                    Ok(self.push_val(SerializableWatType::I32))
+                    self.push_val(SerializableWatType::I32);
+                    Ok(())
                 }
                 marker::NumericConversionKind::Reinterpret32IToF => {
                     self.expected_pop_val(&SerializableWatType::I32)?;
-                    Ok(self.push_val(SerializableWatType::F32))
+                    self.push_val(SerializableWatType::F32);
+                    Ok(())
                 }
                 marker::NumericConversionKind::Reinterpret64FToI => {
                     self.expected_pop_val(&SerializableWatType::F64)?;
-                    Ok(self.push_val(SerializableWatType::I64))
+                    self.push_val(SerializableWatType::I64);
+                    Ok(())
                 }
                 marker::NumericConversionKind::Reinterpret64IToF => {
                     self.expected_pop_val(&SerializableWatType::I64)?;
-                    Ok(self.push_val(SerializableWatType::F64))
+                    self.push_val(SerializableWatType::F64);
+                    Ok(())
                 }
             },
             SerializedInstruction::DefaultString(msg) => Err(WatError::unimplemented_error(

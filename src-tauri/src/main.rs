@@ -82,7 +82,7 @@ impl TryFrom<&Func<'_>> for WastFunc {
                 "Import functions are not supported yet.",
             )),
             wast::core::FuncKind::Inline { locals, expression } => {
-                WastFunc::try_new(info, &locals, expression)
+                WastFunc::try_new(info, locals, expression)
             }
         }
     }
@@ -181,7 +181,7 @@ impl InterpreterStructure {
                                 name.to_string(),
                                 (NumLocationKind::Function, func.len() as u32),
                             )
-                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(&name)))?;
+                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(name)))?;
                     }
                     let mut function = WastFunc::try_from(f)?;
                     if function.name().is_none() {
@@ -196,7 +196,7 @@ impl InterpreterStructure {
                                 name.to_string(),
                                 (NumLocationKind::Memory, memory.len() as u32),
                             )
-                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(&name)))?;
+                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(name)))?;
                     }
                     match &m.kind {
                         wast::core::MemoryKind::Import { import: _, ty: _ } => {
@@ -240,7 +240,7 @@ impl InterpreterStructure {
                                 name.to_string(),
                                 (NumLocationKind::Global, globals.len() as u32),
                             )
-                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(&name)))?;
+                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(name)))?;
                     }
                     match &g.kind {
                         wast::core::GlobalKind::Import(_) => {
@@ -274,7 +274,7 @@ impl InterpreterStructure {
                                         (NumLocationKind::Function, i as u32),
                                     )
                                     .map_or(Ok(()), |_| {
-                                        Err(WatError::duplicate_name_error(&e.name))
+                                        Err(WatError::duplicate_name_error(e.name))
                                     })?;
                                 break;
                             }
@@ -298,7 +298,7 @@ impl InterpreterStructure {
                                 exported
                                     .insert(e.name.to_string(), (NumLocationKind::Global, i as u32))
                                     .map_or(Ok(()), |_| {
-                                        Err(WatError::duplicate_name_error(&e.name))
+                                        Err(WatError::duplicate_name_error(e.name))
                                     })?;
                                 break;
                             }
