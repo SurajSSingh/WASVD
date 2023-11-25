@@ -77,7 +77,7 @@ impl WatError {
         }
     }
 
-    pub fn name_resolution_error(name: String, kind: NumLocationKind) -> Self {
+    pub fn name_resolution_error(name: &str, kind: NumLocationKind) -> Self {
         Self {
             span: None,
             stage: ErrorStage::NameResolving,
@@ -85,11 +85,19 @@ impl WatError {
         }
     }
 
-    pub fn local_resolution_error(name: String) -> Self {
+    pub fn local_resolution_error(name: &str) -> Self {
         Self {
             span: None,
             stage: ErrorStage::NameResolving,
             message: Some(format!("Local {name} not found!")),
+        }
+    }
+
+    pub fn label_resolution_error(name: &str) -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::NameResolving,
+            message: Some(format!("Label {name} not found in flow of block!")),
         }
     }
 
@@ -136,7 +144,7 @@ impl WatError {
             (1, 0) => Self {
                 span: None,
                 stage: ErrorStage::TypeChecking,
-                message: Some("Expected at a value on the stack, but nothing is on the stack!".to_string()),
+                message: Some("Expected at least a value on the stack, but nothing is on the stack!".to_string()),
             },
             (_, 0) => Self {
                 span: None,
@@ -171,8 +179,67 @@ impl WatError {
             stage: ErrorStage::TypeChecking,
             message: Some(format!(
                 "Expected {} types to be [{expected}] on the stack, but stack has [{actual}]!",
-                if is_return { "return" } else { "parameter" }
+                if is_return { "Return" } else { "Parameter" }
             )),
+        }
+    }
+
+    pub fn duplicate_name_error(name: &str) -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::NameResolving,
+            message: Some(format!("Name {name} is defined multiple times")),
+        }
+    }
+
+    pub fn unexpected_type(expected: &SerializableWatType, actual: &SerializableWatType) -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::TypeChecking,
+            message: Some(format!(
+                "Mismatched types, expected {expected}, but got {actual}."
+            )),
+        }
+    }
+
+    pub fn else_without_if_error() -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::TypeChecking,
+            message: Some(format!(
+                "An else block should only follow after an if block."
+            )),
+        }
+    }
+
+    pub fn index_out_of_range_range(expected: usize, actual: usize) -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::TypeChecking,
+            message: Some(format!("Index {actual} out of range: max {expected}.")),
+        }
+    }
+
+    pub fn wrong_arity_error(expected: usize, actual: usize) -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::TypeChecking,
+            message: Some(format!(
+                "Expect stack arity to be {expected}, but got {actual}."
+            )),
+        }
+    }
+
+    pub fn extra_items_on_stack_error(values: &[SerializableWatType]) -> Self {
+        let found = values
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        Self {
+            span: None,
+            stage: ErrorStage::TypeChecking,
+            message: Some(format!("Expect stack to be empty, but found: {found}.")),
         }
     }
 }

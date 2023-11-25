@@ -395,7 +395,7 @@ pub fn try_simple_instruction_from(instruction: &Instruction) -> Option<SimpleIn
 }
 
 /// Control flow instructions
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum BlockKind {
     Block,
     If,

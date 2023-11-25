@@ -7,7 +7,7 @@ use specta::Type;
 use std::collections::HashMap;
 use wast::{
     self,
-    core::{Func, ModuleField},
+    core::{Expression, Func, Local, ModuleField},
     parser::{self, ParseBuffer},
     token::Id,
     Wat,
@@ -37,6 +37,26 @@ pub struct WastFunc {
 }
 
 impl WastFunc {
+    pub fn try_new(
+        info: instruction::InputOutput,
+        locals: &[Local],
+        expression: &Expression,
+    ) -> WatResult<Self> {
+        let locals = locals
+            .iter()
+            .map(|l| match SerializableWatType::try_from(l.ty) {
+                Ok(ty) => Ok((l.id.map(|i| i.name().to_string()), ty)),
+                Err(err) => Err(err),
+            })
+            .collect::<Result<Vec<_>, error::WatError>>()?;
+        let func_name = info.index.clone().unwrap_or_default();
+        Ok(WastFunc {
+            info,
+            locals,
+            block: SerializedInstructionTree::try_from_instruction(&func_name, &expression.instrs)?,
+        })
+    }
+
     pub fn set_name_from_number(&mut self, index: usize) {
         self.info.index = Some(index.to_string());
     }
@@ -61,17 +81,9 @@ impl TryFrom<&Func<'_>> for WastFunc {
             wast::core::FuncKind::Import(_) => Err(error::WatError::unimplemented_error(
                 "Import functions are not supported yet.",
             )),
-            wast::core::FuncKind::Inline { locals, expression } => Ok(WastFunc {
-                info,
-                locals: locals
-                    .iter()
-                    .map(|l| match SerializableWatType::try_from(l.ty) {
-                        Ok(ty) => Ok((l.id.map(|i| i.name().to_string()), ty)),
-                        Err(err) => Err(err),
-                    })
-                    .collect::<Result<Vec<_>, error::WatError>>()?,
-                block: (*expression.instrs).try_into()?,
-            }),
+            wast::core::FuncKind::Inline { locals, expression } => {
+                WastFunc::try_new(info, &locals, expression)
+            }
         }
     }
 }
@@ -162,30 +174,30 @@ impl InterpreterStructure {
         // let mut start = 0;
         for (_i, field) in fields.iter().enumerate() {
             match field {
-                ModuleField::Type(_) => todo!("Type field not implemented"),
-                ModuleField::Rec(_) => todo!("Rec field not implemented"),
-                ModuleField::Import(_) => todo!("Import field not implemented"),
                 ModuleField::Func(f) => {
-                    exported.extend(f.exports.names.iter().map(|name| {
-                        (
-                            name.to_string(),
-                            (NumLocationKind::Function, func.len() as u32),
-                        )
-                    }));
+                    for name in &f.exports.names {
+                        exported
+                            .insert(
+                                name.to_string(),
+                                (NumLocationKind::Function, func.len() as u32),
+                            )
+                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(&name)))?;
+                    }
                     let mut function = WastFunc::try_from(f)?;
                     if function.name().is_none() {
                         function.set_name_from_number(func.len())
                     };
                     func.push(function);
                 }
-                ModuleField::Table(_) => todo!("Table field not implemented"),
                 ModuleField::Memory(m) => {
-                    exported.extend(m.exports.names.iter().map(|name| {
-                        (
-                            name.to_string(),
-                            (NumLocationKind::Memory, func.len() as u32),
-                        )
-                    }));
+                    for name in &m.exports.names {
+                        exported
+                            .insert(
+                                name.to_string(),
+                                (NumLocationKind::Memory, memory.len() as u32),
+                            )
+                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(&name)))?;
+                    }
                     match &m.kind {
                         wast::core::MemoryKind::Import { import: _, ty: _ } => {
                             Err(error::WatError::unimplemented_error(
@@ -222,12 +234,14 @@ impl InterpreterStructure {
                     }
                 }
                 ModuleField::Global(g) => {
-                    exported.extend(g.exports.names.iter().map(|name| {
-                        (
-                            name.to_string(),
-                            (NumLocationKind::Global, func.len() as u32),
-                        )
-                    }));
+                    for name in &g.exports.names {
+                        exported
+                            .insert(
+                                name.to_string(),
+                                (NumLocationKind::Global, globals.len() as u32),
+                            )
+                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(&name)))?;
+                    }
                     match &g.kind {
                         wast::core::GlobalKind::Import(_) => {
                             Err(error::WatError::unimplemented_error(
@@ -254,22 +268,26 @@ impl InterpreterStructure {
                                 .as_ref()
                                 .is_some_and(|item| item == &instruction::index_to_string(&e.item))
                             {
-                                exported.insert(
-                                    e.name.to_string(),
-                                    (NumLocationKind::Function, i as u32),
-                                );
+                                exported
+                                    .insert(
+                                        e.name.to_string(),
+                                        (NumLocationKind::Function, i as u32),
+                                    )
+                                    .map_or(Ok(()), |_| {
+                                        Err(WatError::duplicate_name_error(&e.name))
+                                    })?;
                                 break;
                             }
                         }
                     }
-                    wast::core::ExportKind::Table => todo!("Export Tables not implemented"),
                     wast::core::ExportKind::Memory => {
                         for (i, m) in memory.iter().enumerate() {
                             if m.name == instruction::index_to_string(&e.item) {
-                                exported.insert(
-                                    e.name.to_string(),
-                                    (NumLocationKind::Memory, i as u32),
-                                );
+                                exported
+                                    .insert(e.name.to_string(), (NumLocationKind::Memory, i as u32))
+                                    .map_or(Ok(()), |_| {
+                                        Err(WatError::duplicate_name_error(&m.name))
+                                    })?;
                                 break;
                             }
                         }
@@ -277,20 +295,28 @@ impl InterpreterStructure {
                     wast::core::ExportKind::Global => {
                         for (i, g) in globals.iter().enumerate() {
                             if g.name == instruction::index_to_string(&e.item) {
-                                exported.insert(
-                                    e.name.to_string(),
-                                    (NumLocationKind::Global, i as u32),
-                                );
+                                exported
+                                    .insert(e.name.to_string(), (NumLocationKind::Global, i as u32))
+                                    .map_or(Ok(()), |_| {
+                                        Err(WatError::duplicate_name_error(&e.name))
+                                    })?;
                                 break;
                             }
                         }
                     }
+                    wast::core::ExportKind::Table => todo!("Export Tables not implemented"),
                     wast::core::ExportKind::Tag => todo!("Export Tags not implemented"),
                 },
+                ModuleField::Type(_) => todo!("Type field not implemented"),
+                ModuleField::Data(_) => {
+                    todo!("Data field not implemented")
+                }
+                ModuleField::Table(_) => todo!("Table field not implemented"),
                 ModuleField::Start(_) => todo!("Start field not implemented"),
+                ModuleField::Rec(_) => todo!("Rec field not implemented"),
                 ModuleField::Elem(_) => todo!("Element field not implemented"),
-                ModuleField::Data(_) => todo!("Data field not implemented"),
                 ModuleField::Tag(_) => todo!("Tag field not implemented"),
+                ModuleField::Import(_) => unimplemented!("Import field not implemented"),
                 ModuleField::Custom(_) => todo!("Custom field not implemented"),
             }
         }
@@ -301,68 +327,80 @@ impl InterpreterStructure {
             memory,
             func,
         };
-        // interp_struct.validate()?;
+        interp_struct.validate()?;
         Ok(interp_struct)
     }
 
     /// Validate that the structure is correct, check all types match, and stack flow is correct.
     pub fn validate(&self) -> WatResult<()> {
-        // TODO: Remove the need for .clone()
-        let funcs: HashMap<_, _> = self
-            .func
-            .iter()
-            .enumerate()
-            .flat_map(|(i, f)| {
-                let params: Vec<_> = f.info.input.iter().map(|(_, t)| *t).collect();
-                let results = &f.info.output;
-                if let Some(name) = f.name() {
-                    [
-                        (i.to_string(), (params.clone(), results.clone())),
-                        (name, (params, results.clone())),
-                    ]
-                } else {
-                    [
-                        (i.to_string(), (params.clone(), results.clone())),
-                        (i.to_string(), (params, results.clone())),
-                    ]
-                }
-            })
-            .collect();
+        let mut validator = Validator::new(self);
         for func in &self.func {
-            let mut validator = Validator::new(
-                self.globals
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(i, g)| {
-                        [
-                            (i.to_string(), (g.is_mutable, g.typ)),
-                            (g.name.clone(), (g.is_mutable, g.typ)),
-                        ]
-                    })
-                    .collect(),
-                func.info
-                    .input
-                    .iter()
-                    .chain(func.locals.iter())
-                    .enumerate()
-                    .flat_map(|(i, l)| {
-                        if let Some(name) = l.0.clone() {
-                            [(i.to_string(), l.1), (name, l.1)]
-                        } else {
-                            [(i.to_string(), l.1), (i.to_string(), l.1)]
-                        }
-                    })
-                    .collect(),
-                funcs.clone(),
-                self.memory.iter().map(|m| m.name.clone()).collect(),
-                func.info.output.clone(),
-            );
-            dbg!(&func.block);
-            // for instruction in func.block.get_root() {
-            //     validator.process(instruction)?;
-            // }
+            validator.validate_function(
+                &func.block.array,
+                &func.info.input,
+                &func.locals,
+                &func.info.output,
+            )?;
         }
         Ok(())
+
+        // // TODO: Remove the need for .clone()
+        // // Functions with parameter and result types
+        // let funcs: HashMap<_, _> = self
+        //     .func
+        //     .iter()
+        //     .enumerate()
+        //     .flat_map(|(i, f)| {
+        //         let params: Vec<_> = f.info.input.iter().map(|(_, t)| *t).collect();
+        //         let results = &f.info.output;
+        //         if let Some(name) = f.name() {
+        //             [
+        //                 (i.to_string(), (params.clone(), results.clone())),
+        //                 (name, (params, results.clone())),
+        //             ]
+        //         } else {
+        //             [
+        //                 (i.to_string(), (params.clone(), results.clone())),
+        //                 (i.to_string(), (params, results.clone())),
+        //             ]
+        //         }
+        //     })
+        //     .collect();
+        // for func in &self.func {
+        //     let mut validator = Validator::new(
+        //         self.globals
+        //             .iter()
+        //             .enumerate()
+        //             .flat_map(|(i, g)| {
+        //                 [
+        //                     (i.to_string(), (g.is_mutable, g.typ)),
+        //                     (g.name.clone(), (g.is_mutable, g.typ)),
+        //                 ]
+        //             })
+        //             .collect(),
+        //         func.info
+        //             .input
+        //             .iter()
+        //             .chain(func.locals.iter())
+        //             .enumerate()
+        //             .flat_map(|(i, l)| {
+        //                 if let Some(name) = l.0.clone() {
+        //                     [(i.to_string(), l.1), (name, l.1)]
+        //                 } else {
+        //                     [(i.to_string(), l.1), (i.to_string(), l.1)]
+        //                 }
+        //             })
+        //             .collect(),
+        //         funcs.clone(),
+        //         self.memory.iter().map(|m| m.name.clone()).collect(),
+        //         func.info.output.clone(),
+        //     );
+        //     dbg!(&func.block);
+        //     // for instruction in func.block.get_root() {
+        //     //     validator.process(instruction)?;
+        //     // }
+        // }
+        // Ok(())
     }
 }
 
@@ -416,3 +454,79 @@ mod export_bindings {
         .unwrap();
     }
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+
+//     #[test]
+//     fn transform_block_test() {
+//         let text = "(module
+//             (func $f
+//                 i32.const 4
+//                 (block $q
+//                     i32.const 3
+//                     (loop $w
+//                         i32.const 2
+//                         (block $e
+//                             i32.const 1
+//                             (if $r
+//                                 (then (nop))
+//                                 (else (nop))
+//                             )
+//                         )
+//                         drop
+//                     )
+//                     drop
+//                     (loop $t
+//                         i32.const 2
+//                         (block $y
+//                             i32.const 1
+//                             (if $u
+//                                 (then (nop))
+//                                 (else (nop))
+//                             )
+//                         )
+//                         drop
+//                     )
+//                 )
+//                 drop
+//                 (block $i
+//                     i32.const 2
+//                     (if $o
+//                         (then (nop))
+//                         (else (nop))
+//                     )
+//                 )
+//                 i32.const 0
+//                 (if $p
+//                     (then (i32.const 6))
+//                     (else (i32.const 5))
+//                 )
+//                 drop
+//                 nop
+//             )
+
+//         )";
+//         let result = transform(text).unwrap();
+//         let block = &result.func.first().unwrap().block;
+//         println!(
+//             "\n\nRES={}",
+//             &block
+//                 .root
+//                 .iter()
+//                 .enumerate()
+//                 .map(|(i, x)| format!(
+//                     "{i} => {x:?}\n\t{:?},{:?}",
+//                     &block.array[x.start as usize], &block.array[x.end as usize]
+//                 ))
+//                 .rev()
+//                 .reduce(|x, mut acc| {
+//                     acc.push('\n');
+//                     acc.push_str(&x);
+//                     acc
+//                 })
+//                 .unwrap_or_default()
+//         );
+//     }
+// }

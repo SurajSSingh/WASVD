@@ -1,5 +1,7 @@
 //! This module holds the data types handling converting from Wat instructions to a unified instruction for the interpreter.
 
+use std::collections::HashMap;
+
 use crate::helper::SerializedNumber;
 use crate::marker::{
     try_arithmetic_from, try_bitwise_from, try_block_kind_from, try_byte_count_from,
@@ -9,7 +11,7 @@ use crate::marker::{
     SerializableWatType, SimpleInstruction,
 };
 
-use crate::error::{self, WatError};
+use crate::error::{self, WatError, WatResult};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -542,6 +544,10 @@ impl InputOutput {
         }
         false
     }
+
+    pub fn get_input_types(&self) -> Vec<SerializableWatType> {
+        self.input.iter().map(|(_, typ)| *typ).collect()
+    }
 }
 
 impl TryFrom<&wast::core::TypeUse<'_, FunctionType<'_>>> for InputOutput {
@@ -626,7 +632,7 @@ pub enum SerializedInstruction {
         kind: FloatOperation,
         is_64_bit: bool,
     },
-    Cast(NumericConversionKind),
+    Conversion(NumericConversionKind),
     /// All other instructions not directly defined
     DefaultString(String),
 }
@@ -889,7 +895,7 @@ impl TryFrom<&Instruction<'_>> for SerializedInstruction {
             | Instruction::I32ReinterpretF32
             | Instruction::I64ReinterpretF64
             | Instruction::F32ReinterpretI32
-            | Instruction::F64ReinterpretI64 => Self::Cast(
+            | Instruction::F64ReinterpretI64 => Self::Conversion(
                 try_cast_kind_from(value).ok_or(WatError::invalid_instruction("Casting", value))?,
             ),
             other_instruction => Self::DefaultString(format!("{other_instruction:?}")),
@@ -904,129 +910,269 @@ pub(crate) fn index_to_string(index: &Index) -> String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub enum SerializedInstructionNode {
-    NonBlock(SerializedInstruction),
-    SingleBlock {
-        label: String,
-        inout: InputOutput,
-        is_loop: bool,
-        inner_nodes: Vec<SerializedInstructionNode>,
-    },
-    ConditionalBlock {
-        label: String,
-        inout: InputOutput,
-        then_nodes: Vec<SerializedInstructionNode>,
-        else_nodes: Vec<SerializedInstructionNode>,
-    },
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MarkBlock {
-    Regular,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub enum NodeMark {
+    Block,
     Loop,
-    If,
-    Else,
+    /// Represents a conditional block,
+    /// the [u32] represents where the
+    /// else block starts (if it is the
+    /// same as the end, there is no else)
+    Conditional(u32),
+}
+
+impl From<&BlockKind> for NodeMark {
+    /// Go from [BlockKind] to [NodeMark], defaulting to [NodeMark::Block].
+    /// Conditional is set to 0 by default
+    fn from(value: &BlockKind) -> Self {
+        match value {
+            BlockKind::If => NodeMark::Conditional(0),
+            BlockKind::Loop => NodeMark::Loop,
+            _ => NodeMark::Block,
+        }
+    }
+}
+
+/// A node representing the instruction block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct SerializedInstructionNode {
+    kind: NodeMark,
+    label: String,
+    depth: u32,
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    parent: u32,
+    children: HashMap<u32, u32>,
+}
+
+impl SerializedInstructionNode {
+    pub fn new(kind: NodeMark, label: String, depth: u32, start: u32, parent: u32) -> Self {
+        Self {
+            kind,
+            label,
+            depth,
+            start,
+            end: start,
+            parent,
+            children: HashMap::new(),
+        }
+    }
+
+    pub fn func_block(label: String) -> Self {
+        Self::new(NodeMark::Block, label, 0, 0, 0)
+    }
+
+    pub fn add_child(&mut self, start: u32, child: u32) -> &mut Self {
+        self.children.insert(start, child);
+        self
+    }
+
+    pub fn set_else(&mut self, else_index: u32) -> &mut Self {
+        match self.kind {
+            NodeMark::Conditional(_) => self.kind = NodeMark::Conditional(else_index),
+            _ => { /* Change nothing */ }
+        };
+        self
+    }
+
+    pub fn set_end(&mut self, end: u32) -> &mut Self {
+        self.end = end;
+        self
+    }
+}
+
+pub fn linear_instructions_to_tree(
+    func_label: &str,
+    linear_instructions: &Vec<SerializedInstruction>,
+) -> WatResult<Vec<SerializedInstructionNode>> {
+    let mut nodes = vec![SerializedInstructionNode::func_block(
+        func_label.to_string(),
+    )];
+    // All nodes that need to be filled out.
+    // References index for `nodes`.
+    // Last item is the current working node.
+    let mut node_start_stack = vec![0];
+    for (index, instruction) in linear_instructions.iter().enumerate() {
+        // println!("Before #{index}: {:?}, {:?}", &nodes, &node_start_stack);
+        match instruction {
+            SerializedInstruction::Block { label, kind, .. } => {
+                let index = index as u32;
+                match kind {
+                    BlockKind::Block | BlockKind::If | BlockKind::Loop => {
+                        nodes.push(SerializedInstructionNode::new(
+                            NodeMark::from(kind),
+                            label.clone(),
+                            node_start_stack.len() as u32,
+                            index,
+                            node_start_stack.last().copied().unwrap_or(0),
+                        ));
+                        node_start_stack.push((nodes.len() - 1) as u32);
+                    }
+                    BlockKind::Else => {
+                        nodes
+                            .last_mut()
+                            .map(|node| node.set_else(index).set_end(index));
+                    }
+                    BlockKind::End => {
+                        // nodes.last_mut().map(|node| node.set_end(index as u32));
+                        if let Some(child) = node_start_stack.pop() {
+                            let start = nodes
+                                .get_mut(child as usize)
+                                .map(|node| {
+                                    node.set_end(index);
+                                    node.start
+                                })
+                                .unwrap_or_default();
+                            node_start_stack
+                                .last()
+                                .and_then(|index| nodes.get_mut(*index as usize))
+                                .map(|node| node.add_child(start, child).set_end(index));
+                        }
+                    }
+                }
+            }
+            SerializedInstruction::Branch {
+                default_label: _,
+                other_labels: _,
+                is_conditional: _,
+            } => {
+                // May do something special in future, right now just `continue`
+                continue;
+            }
+            _ => {
+                continue;
+            }
+        }
+    }
+    let expected_first = node_start_stack
+        .pop()
+        .expect("Node start stack to have starting node") as usize;
+    nodes
+        .get_mut(expected_first)
+        .map(|node| node.set_end(linear_instructions.len() as u32 - 1));
+    Ok(nodes)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct SerializedInstructionTree {
-    root: Vec<SerializedInstructionNode>,
+    /// Tree-like structure of blocks.
+    /// Linearized to a vec for easily getting children or parents.
+    pub root: Vec<SerializedInstructionNode>,
+    /// Linear set of instructions
+    pub array: Vec<SerializedInstruction>,
 }
 
 impl SerializedInstructionTree {
-    pub fn get_root(&self) -> &Vec<SerializedInstructionNode> {
-        &self.root
+    pub fn try_from_instruction(name: &str, value: &[Instruction]) -> WatResult<Self> {
+        let linear_instrctions = (*value)
+            .iter()
+            .map(|ins| ins.try_into())
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self {
+            root: linear_instructions_to_tree(name, &linear_instrctions)?,
+            array: linear_instrctions,
+        })
     }
 }
 
-impl TryFrom<&[Instruction<'_>]> for SerializedInstructionTree {
-    type Error = error::WatError;
+// impl TryFrom<&[Instruction<'_>]> for SerializedInstructionTree {
+//     type Error = error::WatError;
 
-    fn try_from(value: &[Instruction]) -> Result<Self, Self::Error> {
-        let mut wait_stack = Vec::new();
-        let mut current = Vec::with_capacity(value.len());
-        let mut has_func_ended = false;
-        for instruction in value {
-            let si = SerializedInstruction::try_from(instruction)?;
-            dbg!((&wait_stack, &current, &si));
-            match si {
-                SerializedInstruction::Block { label, kind, inout } => match kind {
-                    BlockKind::Block => {
-                        wait_stack.push((current, MarkBlock::Regular, label, inout.unwrap()));
-                        current = Vec::new();
-                    }
-                    BlockKind::Loop => {
-                        wait_stack.push((current, MarkBlock::Loop, label, inout.unwrap()));
-                        current = Vec::new();
-                    }
-                    BlockKind::If => {
-                        wait_stack.push((current, MarkBlock::If, label, inout.unwrap()));
-                        current = Vec::new();
-                    }
-                    BlockKind::Else => {
-                        wait_stack.push((current, MarkBlock::Else, label, InputOutput::default()));
-                        current = Vec::new();
-                    }
-                    BlockKind::End => {
-                        let block = wait_stack.pop();
+//     fn try_from(value: &[Instruction]) -> Result<Self, Self::Error> {
+//         let linear_instrctions = (*value)
+//             .iter()
+//             .map(|ins| ins.try_into())
+//             .collect::<Result<_, _>>()?;
 
-                        if let Some((mut nodes, mark, label, inout)) = block {
-                            if mark == MarkBlock::Else {
-                                let else_nodes = current;
-                                let then_nodes = nodes;
-                                let (mut before_if, mark2, label_then, if_inout) = wait_stack
-                                    .pop()
-                                    .ok_or(WatError::unimplemented_error("No if block provided"))?;
-                                if mark2 != MarkBlock::If {
-                                    return Err(WatError::unimplemented_error(
-                                        "No if block before else provided",
-                                    ));
-                                }
-                                assert!(label_then == label);
-                                let if_else_block = SerializedInstructionNode::ConditionalBlock {
-                                    label,
-                                    inout: if_inout,
-                                    then_nodes,
-                                    else_nodes,
-                                };
-                                before_if.push(if_else_block);
-                                current = before_if;
-                            } else if mark == MarkBlock::If {
-                                // If without else
-                                let if_block = SerializedInstructionNode::ConditionalBlock {
-                                    label,
-                                    inout: inout,
-                                    then_nodes: current,
-                                    else_nodes: Vec::default(),
-                                };
-                                nodes.push(if_block);
-                                current = nodes;
-                            } else {
-                                let block = SerializedInstructionNode::SingleBlock {
-                                    label,
-                                    inout,
-                                    is_loop: mark == MarkBlock::Loop,
-                                    inner_nodes: current,
-                                };
-                                nodes.push(block);
-                                current = nodes;
-                            }
-                        } else if !has_func_ended {
-                            // Function ending End instruction
-                            has_func_ended = true;
-                            continue;
-                        } else {
-                            return Err(WatError::invalid_instruction(
-                                "No",
-                                &Instruction::End(None),
-                            ));
-                        }
-                    }
-                },
-                _ => current.push(SerializedInstructionNode::NonBlock(si)),
-            }
-        }
-        assert!(wait_stack.is_empty());
-        Ok(Self { root: current })
-    }
-}
+//         Ok(Self {
+//             root: linear_instructions_to_tree(&linear_instrctions),
+//             array: linear_instrctions,
+//         })
+// let mut wait_stack = Vec::new();
+// let mut current = Vec::with_capacity(value.len());
+// let mut has_func_ended = false;
+// for instruction in value {
+//     let si = SerializedInstruction::try_from(instruction)?;
+//     dbg!((&wait_stack, &current, &si));
+//     match si {
+//         SerializedInstruction::Block { label, kind, inout } => match kind {
+//             BlockKind::Block => {
+//                 wait_stack.push((current, MarkBlock::Regular, label, inout.unwrap()));
+//                 current = Vec::new();
+//             }
+//             BlockKind::Loop => {
+//                 wait_stack.push((current, MarkBlock::Loop, label, inout.unwrap()));
+//                 current = Vec::new();
+//             }
+//             BlockKind::If => {
+//                 wait_stack.push((current, MarkBlock::If, label, inout.unwrap()));
+//                 current = Vec::new();
+//             }
+//             BlockKind::Else => {
+//                 wait_stack.push((current, MarkBlock::Else, label, InputOutput::default()));
+//                 current = Vec::new();
+//             }
+//             BlockKind::End => {
+//                 let block = wait_stack.pop();
+
+//                 if let Some((mut nodes, mark, label, inout)) = block {
+//                     if mark == MarkBlock::Else {
+//                         let else_nodes = current;
+//                         let then_nodes = nodes;
+//                         let (mut before_if, mark2, label_then, if_inout) = wait_stack
+//                             .pop()
+//                             .ok_or(WatError::unimplemented_error("No if block provided"))?;
+//                         if mark2 != MarkBlock::If {
+//                             return Err(WatError::unimplemented_error(
+//                                 "No if block before else provided",
+//                             ));
+//                         }
+//                         assert!(label_then == label);
+//                         let if_else_block = SerializedInstructionNode::ConditionalBlock {
+//                             label,
+//                             inout: if_inout,
+//                             then_nodes,
+//                             else_nodes,
+//                         };
+//                         before_if.push(if_else_block);
+//                         current = before_if;
+//                     } else if mark == MarkBlock::If {
+//                         // If without else
+//                         let if_block = SerializedInstructionNode::ConditionalBlock {
+//                             label,
+//                             inout: inout,
+//                             then_nodes: current,
+//                             else_nodes: Vec::default(),
+//                         };
+//                         nodes.push(if_block);
+//                         current = nodes;
+//                     } else {
+//                         let block = SerializedInstructionNode::SingleBlock {
+//                             label,
+//                             inout,
+//                             is_loop: mark == MarkBlock::Loop,
+//                             inner_nodes: current,
+//                         };
+//                         nodes.push(block);
+//                         current = nodes;
+//                     }
+//                 } else if !has_func_ended {
+//                     // Function ending End instruction
+//                     has_func_ended = true;
+//                     continue;
+//                 } else {
+//                     return Err(WatError::invalid_instruction(
+//                         "No",
+//                         &Instruction::End(None),
+//                     ));
+//                 }
+//             }
+//         },
+//         _ => current.push(SerializedInstructionNode::NonBlock(si)),
+//     }
+// }
+// assert!(wait_stack.is_empty());
+// Ok(Self { root: current })
+//     }
+// }
