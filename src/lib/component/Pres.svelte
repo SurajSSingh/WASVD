@@ -1,13 +1,17 @@
 <script lang="ts">
-	import Slides from "$lib/animotion/components/slide.svelte";
-	import Presentation from "$lib/animotion/components/presentation.svelte";
+	import {Presentation, Slide} from "$lib/animotion/components/";
+	import { formatStack, type EvalResult } from "$lib/interpreter";
+
+    export let steps: { result: EvalResult; previous: (number | bigint)[]; current: (number | bigint)[] }[] = [];
 </script>
 
 <Presentation>
-    <Slides>
-        <p>HELLO</p>
-    </Slides>
-    <Slides>
-        <p>YES</p>
-    </Slides>
+    {#each steps as step, i}
+    <Slide>
+        <p class="font-bold">Step #{i + 1}:</p>
+        <p>{step.result.action}</p>
+        <p>Start: {formatStack(step.previous)}</p>
+        <p>End: {formatStack(step.current)}</p>
+    </Slide>
+    {/each}
 </Presentation>

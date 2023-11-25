@@ -59,7 +59,7 @@
 			{#if tabSet === 0}
 				<CodeMirror bind:value={text} on:change={() => currentResult="❔"} lang={wast()} class=" bg-slate-100 text-black" />
 			{:else if tabSet === 1}
-				<StructureView/>
+				<StructureView />
 			{:else if tabSet === 2}
 				<CompilerDebug {compError}/>
 			{/if}

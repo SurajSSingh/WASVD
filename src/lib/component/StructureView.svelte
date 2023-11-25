@@ -26,7 +26,7 @@
                             {/each}
                         </ul>
                         <h3>Instructions</h3>
-                        <InstructionBlock nodes={f.block.root} />
+                        <InstructionBlock tree={f.block} index={0}/>
                         <h3>Return</h3>
                         <ul>
                             {#each f.info.output as res, i}

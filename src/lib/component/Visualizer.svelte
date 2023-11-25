@@ -1,19 +1,46 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onDestroy, onMount } from 'svelte';
 	import { Presentation, Slide } from '$lib/animotion/components';
 	import { deserialize_number } from '$lib';
-	import { exec_instructions, type EvalResult, type MyError } from '$lib/interpreter';
+	import { exec_instructions, type EvalResult, type MyError, type WasmData } from '$lib/interpreter';
     import type * as command from '$lib/bindings';
     import { watStructure } from "$lib/store";
+	import Pres from './Pres.svelte';
 
     let funcSelect: number = -1;
     let steps: { result: EvalResult; previous: (number | bigint)[]; current: (number | bigint)[] }[] =
 		[];
 	let stepError: MyError | null = null;
+    let data: WasmData = {
+        globals: {},
+        memory: {},
+        functions: [],
+    };
+    let params: {[key:string]:number} = {};
 
+    function reset(){
+        funcSelect = -1;
+        steps = [];
+        stepError = null;
+    }
 
-    function run(tree: command.SerializedInstructionTree) {
-		const result = exec_instructions(tree);
+    let unsubscribe = watStructure.subscribe((structure) => {
+        reset();
+        for (const global of structure?.globals??[]) {
+            data.globals[global.name] = deserialize_number(global.val);
+        }
+        for (const memory of structure?.memory??[]) {
+            data.memory[memory.name] = memory.data;
+        }
+    })
+    onDestroy(() => {
+        unsubscribe()
+    })
+
+    function run(func: command.WastFunc) {
+        // let locals = func.info.input.map(())
+        let local_names = func.info.input.concat(func.locals);
+		const result = exec_instructions(func.block, data, {});
 		if ('message' in result) {
 			stepError = result;
 			steps = [];
@@ -22,15 +49,6 @@
 			steps = result;
 		}
 		console.log(steps);
-	}
-
-    function formatStack(stack:(bigint|number)[]):string{
-		if(stack.length === 0){
-			return "Empty"
-		}
-		else{
-			return stack.map(n => n.toString()).join(", ");
-		}
 	}
 
     // let Animation;
@@ -118,7 +136,7 @@
                         {@const name = p[0] ? p[0] + `(${index})` : index.toString()}
                         <label class="label">
                             <span>Parameter {name} : {p[1]} = </span>
-                            <input id="number" type="number" value="0" class=" bg-slate-800" />
+                            <input id="number" type="number" bind:value="{params[name]}" class=" bg-slate-800" />
                         </label>
                     {/each}
                 </section>
@@ -130,19 +148,12 @@
                 {/each}
                 </section>
             </div>
-            <button on:click={() => run(f.block)} class="bg-primary-500 p-2">Run</button>
+            <button on:click={() => run(f)} class="bg-primary-500 p-2">Run</button>
             <hr />
             {#if steps.length > 0}
-            <Presentation>
-                {#each steps as step, i}
-                <Slide>
-                    <p class="font-bold">Step #{i + 1}:</p>
-                    <p>{step.result.action}</p>
-                    <p>Start: {formatStack(step.previous)}</p>
-                    <p>End: {formatStack(step.current)}</p>
-                </Slide>
-                {/each}
-            </Presentation>
+            <div class="h-2/3">
+                <Pres steps={steps}/>
+            </div>
             {/if}
             {#if stepError}
                  <p>{stepError.message}</p>
