@@ -1,9 +1,9 @@
-import { instruction_in_plain_english } from "$lib";
+import { deserialize_number, instruction_in_plain_english } from "$lib";
 import type * as command from "$lib/bindings"
 
 export type EvalResult = {
     action: string,
-    continuation: string|number|null
+    continuation: {label: string|number, goto: "Return"| "End" | "Else" | "Block"}|null
 }
 
 export type MyError = {
@@ -12,8 +12,24 @@ message: string
 
 type StackType = (bigint|number)[];
 
-function unimplemented_error(instruction: command.SerializedInstruction):MyError{
+type VariableTableType = {
+    [key:string]: number|bigint
+};
+
+export type WasmData = {
+    globals: VariableTableType,
+    memory: {
+        [key:string]: (number|bigint)[]
+    },
+    functions: command.WastFunc[],
+}
+
+function unimplemented_instruction_error(instruction: command.SerializedInstruction):MyError{
     return {message: `Unimplmented Instruction: ${instruction}`}
+}
+
+function unimplemented_error(msg: string):MyError{
+    return {message: `Unimplmented Instruction: ${msg}`}
 }
 
 function not_enough_stack_error(expected: number, actual: number):MyError{
@@ -28,13 +44,21 @@ function type_mismatch_error():MyError{
     return { message: "Types do not match"}
 }
 
+function data_not_found_error(location: string, type: "Global" | "Local" | "Memory"):MyError{
+    return {message: `Data not found at ${location} (${type})`}
+}
+
+function name_resolution_error(label: string): MyError{
+    return {message: `The label ${label} is not found in scope!`}
+}
+
+// function block_depth_exceeded_error(max_depth: number, actual: number):MyError{
+//     return {message: `Exceeded block depth of ${max_depth}, but got ${actual}`}
+// }
+
 function unreachable_reached_error():MyError{
     return {message: "Reached an unreachable statement"}
 }
-
-// function unknown_instruction_error(instruction: command.SerializedInstruction):Error{
-//     return {message: `Reached an unknown instruction: ${instruction}`}
-// }
 
 function stack_pop(stack:StackType, amount: number): StackType|MyError{
     const subStack: StackType = []
@@ -53,6 +77,11 @@ function stack_pop(stack:StackType, amount: number): StackType|MyError{
         }
     }
     return subStack;
+}
+
+function tryNumberify(location: string): number|string{
+    const attemptedNumber = +location;
+    return !isNaN(attemptedNumber) && attemptedNumber > -1 ? attemptedNumber : location ;
 }
 
 function math_operation(op: command.ArithmeticOperation | command.BitwiseOperation | command.ComparisonOperation | command.FloatOperation, first: number, second: number):number|MyError
@@ -266,8 +295,16 @@ function math_operation(op: command.ArithmeticOperation | command.BitwiseOperati
     return type_mismatch_error();
 }
 
+export function formatStack(stack:(bigint|number)[]):string{
+    if(stack.length === 0){
+        return "Empty"
+    }
+    else{
+        return stack.map(n => n.toString()).join(", ");
+    }
+}
 
-export function eval_single_instruction(instruction: command.SerializedInstruction, stack: StackType):EvalResult|MyError{
+export function eval_single_instruction(instruction: command.SerializedInstruction, stack: StackType, data: WasmData, locals: VariableTableType):EvalResult|MyError{
     if ("Simple" in instruction){
         switch (instruction.Simple) {
             case "Unreachable":
@@ -275,49 +312,123 @@ export function eval_single_instruction(instruction: command.SerializedInstructi
             case "Nop":
                 break;
             case "Return":
-                return {action: instruction_in_plain_english(instruction), continuation: null};
+                return {action: instruction_in_plain_english(instruction), continuation: {label:0, goto:"Return"}};
             case "Drop":
                 stack.pop()
                 break;
         }
     }else if("Block" in instruction){
-        return unreachable_reached_error();
+        // All except If-else does nothing special (at least not until branch)
+        if(instruction.Block.kind === "If"){
+            const numberOrError = stack_pop(stack, 1);
+            if("message" in numberOrError){
+                // is Error
+                return numberOrError;
+            }
+            const [a] = numberOrError;
+            // If zero, then skip to else
+            if(a === 0 || a === 0n) {
+                return {action: instruction_in_plain_english(instruction), continuation: {label: 0, goto:"Else"}};
+            }
+            // Otherwise, continue until else
+        }
+        // If we reach an else, skip to end
+        else if (instruction.Block.kind === "Else"){
+            return {action: instruction_in_plain_english(instruction), continuation: {label: 0, goto:"End"}};
+        }
+        
     }
     else if("Branch" in instruction){
         if(instruction.Branch.other_labels){
-            return unimplemented_error(instruction);
+            return unimplemented_instruction_error(instruction);
         }
-        return unimplemented_error(instruction);
+        if(instruction.Branch.is_conditional){
+            const numberOrError = stack_pop(stack, 1);
+            if("message" in numberOrError){
+                // is Error
+                return numberOrError;
+            }
+            const [a] = numberOrError;
+            // If zero, just go to next item
+            if(a === 0 || a === 0n) {
+                return {action: instruction_in_plain_english(instruction), continuation:null};
+            }
+        }
+        // Do branch to label or block index 
+        return {action: instruction_in_plain_english(instruction), continuation: {label: tryNumberify(instruction.Branch.default_label), goto:"Block"}}
     }
     else if("Call" in instruction){
-        return unimplemented_error(instruction);
+        return unimplemented_instruction_error(instruction);
     }
     else if("Data" in instruction){
         switch (instruction.Data.kind) {
-            case "GetLocal":
-                return unimplemented_error(instruction);
-            case "GetGlobal":
-                return unimplemented_error(instruction);
-            case "SetLocal":
-                return unimplemented_error(instruction);
-            case "SetGlobal":
-                return unimplemented_error(instruction);
-            case "TeeLocal":
-                return unimplemented_error(instruction);
+            case "GetLocal":{
+                const local = locals[instruction.Data.location];
+                if(local){
+                    stack.push(local);
+                }
+                else{
+                    return data_not_found_error(instruction.Data.location, "Local");
+                }
+                break;
+            }
+            case "GetGlobal":{
+                const global = data.globals[instruction.Data.location];
+                if(global){
+                    stack.push(global);
+                }
+                else{
+                    return data_not_found_error(instruction.Data.location, "Global");
+                }
+                break;
+            }
+            case "SetLocal":{
+                const numberOrError = stack_pop(stack, 1);
+                if("message" in numberOrError){
+                    // is Error
+                    return numberOrError;
+                }
+                const [a] = numberOrError;
+                locals[instruction.Data.location] = a;
+                break;
+            }
+            case "SetGlobal":{
+                const numberOrError = stack_pop(stack, 1);
+                if("message" in numberOrError){
+                    // is Error
+                    return numberOrError;
+                }
+                const [a] = numberOrError;
+                data.globals[instruction.Data.location] = a;
+                break;
+            }
+            case "TeeLocal":{
+                const numberOrError = stack_pop(stack, 1);
+                if("message" in numberOrError){
+                    // is Error
+                    return numberOrError;
+                }
+                const [a] = numberOrError;
+                // Set
+                locals[instruction.Data.location] = a;
+                // Get
+                stack.push(locals[instruction.Data.location]);
+                break;
+            }
             case "GetMemorySize":
-                return unimplemented_error(instruction);
+                return unimplemented_instruction_error(instruction);
             case "SetMemorySize":
-                return unimplemented_error(instruction);
+                return unimplemented_instruction_error(instruction);
             default:
                 break;
         }
     }
     else if("Memory" in instruction){
         if(instruction.Memory.is_storing){
-            return unimplemented_error(instruction);
+            return unimplemented_instruction_error(instruction);
         }
         else{
-            return unimplemented_error(instruction);
+            return unimplemented_instruction_error(instruction);
         }
     }
     else if("Const" in instruction){
@@ -648,75 +759,238 @@ export function eval_single_instruction(instruction: command.SerializedInstructi
             }
         }
     }
-    return {action: instruction_in_plain_english(instruction), continuation: ""}
+    return {action: instruction_in_plain_english(instruction), continuation: null}
 }
 
-export function* eval_instruction_node(node: command.SerializedInstructionNode, stack: (bigint|number)[]):Generator<EvalResult|MyError, null|MyError> {
-    let yieldableNodes;
-    if("NonBlock" in node){
-        yield eval_single_instruction(node.NonBlock, stack)
-    } 
-    else if ("SingleBlock" in node) {
-        yieldableNodes = node.SingleBlock.inner_nodes;
-        // for (const instruction of node.SingleBlock.inner_nodes) {
-        //     yield* eval_instruction_node(instruction, stack)
-        // }
-    }
-    else if ("ConditionalBlock" in node) {
-        const popped = stack_pop(stack, 1);
-        if("message" in popped){
-            return stack_empty_error()
-        }
-        const [conditionalValue] = popped;
-        yieldableNodes = (typeof conditionalValue === "number" && conditionalValue !== 0) 
-                      || (typeof conditionalValue === "bigint" && conditionalValue !== 0n) 
-                      ? node.ConditionalBlock.then_nodes
-                      : node.ConditionalBlock.else_nodes;
-        // if((typeof conditionalValue === "number" && conditionalValue !== 0) 
-        // || (typeof conditionalValue === "bigint" && conditionalValue !== BigInt(0))){
-        //     for (const instruction of node.ConditionalBlock.then_nodes) {
-        //         yield* eval_instruction_node(instruction, stack)
-        //     }
-        // }
-        // else {
-        //     for (const instruction of node.ConditionalBlock.else_nodes) {
-        //         yield* eval_instruction_node(instruction, stack)
-        //     }
-        // }
-    }
-    if(yieldableNodes){
-        for (const instruction of yieldableNodes) 
-        {
-            yield* eval_instruction_node(instruction, stack);
-        }
-    }
-    return null;
-}
+// export function* eval_instruction_node(node: command.SerializedInstructionNode, stack: (bigint|number)[],  data: WasmData):Generator<EvalResult|MyError, null|MyError> {
+//     let yieldableNodes;
+//     let kind: "" | "Loop" | "Bloc" | "Cond" = "";
+//     let label = "";
 
 
-export function exec_instructions(tree: command.SerializedInstructionTree):{result: EvalResult; previous: (number | bigint)[]; current: (number | bigint)[];}[]|MyError{
-    const stack: (bigint|number)[] = [];
+//     // if("NonBlock" in node){
+//     //     yield eval_single_instruction(node.NonBlock, stack, data)
+//     // } 
+//     // else if ("SingleBlock" in node) {
+//     //     yieldableNodes = node.SingleBlock.inner_nodes;
+//     //     kind = node.SingleBlock.is_loop ? "Loop" : "Bloc";
+//     //     label = node.SingleBlock.label;
+//     // }
+//     // else if ("ConditionalBlock" in node) {
+//     //     const popped = stack_pop(stack, 1);
+//     //     if("message" in popped){
+//     //         return stack_empty_error()
+//     //     }
+//     //     const [conditionalValue] = popped;
+//     //     yieldableNodes = (typeof conditionalValue === "number" && conditionalValue !== 0) 
+//     //                   || (typeof conditionalValue === "bigint" && conditionalValue !== 0n) 
+//     //                   ? node.ConditionalBlock.then_nodes
+//     //                   : node.ConditionalBlock.else_nodes;
+//     // }
+//     // if(yieldableNodes){
+//     //     loop: for (const instruction of yieldableNodes) 
+//     //     {
+//     //         for (const result of eval_instruction_node(instruction, stack, data)) {
+//     //             if("message" in result){
+//     //                 return result
+//     //             }
+//     //             else if(typeof result.continuation === "number"){
+//     //                 // Check block for where to go next
+//     //                 // If 0, either reset block (loop) or go to end
+//     //                 if(result.continuation === 0){
+//     //                     if(kind === "Bloc"){
+//     //                         break loop;
+//     //                     } else {
+//     //                         //
+//     //                     }
+//     //                 }
+//     //                 else {
+//     //                     // Pass to next block or
+//     //                     return 
+//     //                 }
+//     //             }
+//     //             else if (typeof result.continuation === "string" && result.continuation !== ""){
+//     //                 // Check block for where to go next
+//     //                 result.continuation
+//     //             }
+//     //             yield result
+//     //         }
+//     //     }
+//     // }
+//     // return null;
+// }
+
+
+export function exec_instructions(tree: command.SerializedInstructionTree, data: WasmData, locals:VariableTableType):{result: EvalResult; previous: (number | bigint)[]; current: (number | bigint)[];}[]|MyError{
+    const currentStack: (bigint|number)[] = [];
+    let previousStack;
     const final: {
         result: EvalResult;
         previous: (number | bigint)[];
         current: (number | bigint)[];
     }[] = [];
-    for (const node of tree.root) {
-        // console.log(JSON.stringify(node))
-        let previousStack = structuredClone(stack);
-        topLoop: for (const action of eval_instruction_node(node,stack)){
-            if("message" in action){
-                return action;
-            }
-            final.push({result: action, previous:previousStack, current:structuredClone(stack)})
-            previousStack = structuredClone(stack);
-            if(action.continuation === null){
-                // Null continuation means immediate return
-                break topLoop;
-            }
-            // console.log("RESULT: ", result);
+    console.log(JSON.stringify(tree.root));
+    let currentBlock = tree.root[0];
+    for (let index = currentBlock.start; index < tree.array.length;) {
+        console.log(`BEFORE ${index}: `, [currentBlock.kind, currentBlock.label, currentBlock.depth], [currentBlock.start, currentBlock.end], [currentBlock.parent, currentBlock.children]);
+        // Update current block first
+        if(index === currentBlock.end){
+            // Index at end of block, so go back up to parent
+            currentBlock = tree.root[currentBlock.parent];
+            console.log("CHILD -> PARENT");
         }
+        if(index in currentBlock.children){
+            // Index in children, so get change block to child
+            const childIndex = currentBlock.children[index];
+            currentBlock = tree.root[childIndex];
+            console.log("PARENT -> CHILD");
+        }
+        // Evaluate instruction
+        const instruction = tree.array[index];
+        previousStack = structuredClone(currentStack);
+        const action = eval_single_instruction(instruction, currentStack, data, locals);
+        // Return errors immediately
+        if("message" in action){
+            return action;
+        }
+        // Push result
+        final.push({
+            result: action,
+            previous: structuredClone(previousStack),
+            current: structuredClone(currentStack),
+        })
+        // If continuation is not null, choose where to go next
+        if(action.continuation !== null){
+            console.log("Branch happened: ", action.action, action.continuation)
+            if(action.continuation.goto === "Return"){
+                console.log("RETURN IMMEDIATELY");
+                break;
+            }
+            else if(action.continuation.goto === "Else" && typeof currentBlock.kind === "object"){
+                console.log(`Skip to ELSE: from ${index} to ${currentBlock.kind.Conditional}`);
+                // Go to where the else starts (skipping then)
+                index = currentBlock.kind.Conditional;
+            }
+            else if(action.continuation.goto === "End" && typeof currentBlock.kind === "object"){
+                console.log(`Skip to END: from ${index} to ${currentBlock.end}`);
+                // Go to the end of conditional (skipping else)
+                index = currentBlock.end;
+            }
+            else if ((action.continuation.goto === "Else" || action.continuation.goto === "End") && typeof currentBlock.kind !== "object"){
+                return unimplemented_error("Else or End can only be continued from conditional");
+            }
+            else if(action.continuation.goto === "Block"){
+                // Number label -> go to nth enclosing block, current block is 0
+                if(typeof action.continuation.label === "number" ){
+                    while(action.continuation.label > 0){
+                        console.log(`${action.continuation.label} CHILD -> PARENT (${currentBlock.parent})`);
+                        currentBlock = tree.root[currentBlock.parent];
+                        action.continuation.label--;
+                    }
+                    if (currentBlock.kind === "Block"){
+                        console.log(`Skip to END: from ${index} to ${currentBlock.end}`);
+                        // For block, go to end
+                        index = currentBlock.end;
+                    }
+                    else if (currentBlock.kind === "Loop"){
+                        console.log(`Skip to START: from ${index} to ${currentBlock.start}`);
+                        // For loop, go to start
+                        index = currentBlock.start
+                    }
+                }
+                // String label -> go to enclosing block with the label, traversing up parents
+                else if(typeof action.continuation.label === "string"){
+                    while(action.continuation.label !== currentBlock.label && currentBlock.depth !== 0){
+                        console.log(`${action.continuation.label} CHILD -> PARENT (${currentBlock.parent})`);
+                        currentBlock = tree.root[currentBlock.parent];
+                    }
+                    // Return error if label is not found
+                    if(action.continuation.label !== currentBlock.label){
+                        return name_resolution_error(action.continuation.label);
+                    }
+                    // Otherwise, update index
+                    if (currentBlock.kind === "Block"){
+                        console.log(`Skip to END: from ${index} to ${currentBlock.end}`);
+                        // For block, go to end
+                        index = currentBlock.end;
+                    }
+                    else if (currentBlock.kind === "Loop"){
+                        console.log(`Skip to START: from ${index} to ${currentBlock.start}`);
+                        // For loop, go to start
+                        index = currentBlock.start
+                    }
+
+                }
+            }
+            // if(typeof action.continuation === "number"){
+            //     // Negative number means immediate return.
+            //     if(action.continuation < 0 ){
+            //         return final;
+            //     }
+            //     else if(action.continuation > currentBlock.depth){
+            //         return block_depth_exceeded_error(currentBlock.depth, action.continuation)
+            //     }
+            //     // Traverse up until 0
+            //     while(action.continuation > 0){
+            //         currentBlock = tree.root[currentBlock.parent];
+            //         action.continuation--;
+            //     }
+            //     // continuation is 0
+            //     if(typeof currentBlock.kind === "object"){
+            //         currentBlock.kind.Conditional
+            //         // instruction
+            //         // if(currentBlock.kind.Conditional)
+            //     }
+            //     else if (currentBlock.kind === "Block"){
+            //      // For block, goto end
+            //      index = currentBlock.end;
+            //     }
+            //     else if (currentBlock.kind === "Loop"){
+            //         // For loop, goto start
+            //         index = currentBlock.start;
+                    
+            //     }
+            // }
+            // action.continuation
+        }
+        console.log(instruction_in_plain_english(tree.array[index]));
+        index++;
+        console.log(`AFTER ${index-1}: `, [currentBlock.kind, currentBlock.label, currentBlock.depth], [currentBlock.start, currentBlock.end], [currentBlock.parent, currentBlock.children]);
+        // const instruction = tree.array[index];
+        // previousStack = structuredClone(currentStack);
+        // const action = eval_single_instruction(instruction, currentStack, data);
+        // if ("message" in action){
+        //     return action;
+        // }
+        // final.push({result: action, previous:previousStack, current:structuredClone(currentStack)})
+
+        // if(action.continuation === null){
+        //     index++
+        // }else{
+
+        // }
     }
+
+    // topLoop: for (const node of tree.root) {
+    //     // console.log(JSON.stringify(node))
+    //     let previousStack = structuredClone(stack);
+    //     for (const action of eval_instruction_node(node,stack, data)){
+    //         if("message" in action){
+    //             return action;
+    //         }
+    //         final.push({result: action, previous:previousStack, current:structuredClone(stack)})
+    //         previousStack = structuredClone(stack);
+    //         if(action.continuation === null){
+    //             // Null continuation means immediate return
+    //             break topLoop;
+    //         }
+    //         else if (action.continuation === ""){ 
+    //             // No continuation point, just continue to next
+    //             continue; 
+    //         }
+
+    //     }
+    // }
     return final;
 }
 

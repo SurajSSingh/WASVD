@@ -14,16 +14,19 @@ export function transform(text: string) {
     return invoke()<InterpreterStructure>("transform", { text })
 }
 
+export type InterpreterStructure = { name: string; exported: { [key: string]: [NumLocationKind, number] }; globals: GlobalData[]; memory: MemoryData[]; func: WastFunc[] }
 /**
  * Memory Instructions
  */
 export type DataInstruction = "GetLocal" | "GetGlobal" | "SetLocal" | "SetGlobal" | "TeeLocal" | "GetMemorySize" | "SetMemorySize"
-export type SerializedInstructionTree = { root: SerializedInstructionNode[] }
 /**
  * Comparison operations
  */
 export type ComparisonOperation = "EqualZero" | "Equal" | "NotEqual" | "LessThenSigned" | "LessThenUnsigned" | "GreaterThenSigned" | "GreaterThenUnsigned" | "LessThenOrEqualToSigned" | "LessThenOrEqualToUnsigned" | "GreaterThenOrEqualToSigned" | "GreaterThenOrEqualToUnsigned"
-export type MemoryData = { name: string; min: SerializedNumber; max: SerializedNumber; is_32: boolean; is_shared: boolean; data: number[] }
+/**
+ * A node representing the instruction block.
+ */
+export type SerializedInstructionNode = { kind: NodeMark; label: string; depth: number; start: number; end: number; parent: number; children: { [key: number]: number } }
 /**
  * Bitwise operations
  */
@@ -39,12 +42,11 @@ export type FloatOperation = "AbsoluteValue" | "Negation" | "Ceiling" | "Floor" 
  * All except [ValType::Ref] are supported, but must explicity convert.
  */
 export type SerializableWatType = "I32" | "I64" | "F32" | "F64" | "V128"
-export type GlobalData = { name: string; typ: SerializableWatType; is_mutable: boolean; val: SerializedNumber }
 /**
  * Serialized instructions based on parts of [Instruction],
  * but is more generic over types (e.g. a single Add instruction that carries the type).
  */
-export type SerializedInstruction = { Simple: SimpleInstruction } | { Block: { label: string; kind: BlockKind; inout: InputOutput | null } } | { Branch: { default_label: string; other_labels: string[]; is_conditional: boolean } } | { Call: { index: string; inout: InputOutput } } | { Data: { kind: DataInstruction; location: string } } | { Memory: { location: string; typ: SerializableWatType; count: ByteKind; offset: number; alignment: ByteKind; is_storing: boolean } } | { Const: { typ: SerializableWatType; value: SerializedNumber } } | { Comparison: { kind: ComparisonOperation; typ: SerializableWatType } } | { Arithmetic: { kind: ArithmeticOperation; typ: SerializableWatType } } | { Bitwise: { kind: BitwiseOperation; is_64_bit: boolean } } | { Float: { kind: FloatOperation; is_64_bit: boolean } } | { Cast: NumericConversionKind } | { DefaultString: string }
+export type SerializedInstruction = { Simple: SimpleInstruction } | { Block: { label: string; kind: BlockKind; inout: InputOutput | null } } | { Branch: { default_label: string; other_labels: string[]; is_conditional: boolean } } | { Call: { index: string; inout: InputOutput } } | { Data: { kind: DataInstruction; location: string } } | { Memory: { location: string; typ: SerializableWatType; count: ByteKind; offset: number; alignment: ByteKind; is_storing: boolean } } | { Const: { typ: SerializableWatType; value: SerializedNumber } } | { Comparison: { kind: ComparisonOperation; typ: SerializableWatType } } | { Arithmetic: { kind: ArithmeticOperation; typ: SerializableWatType } } | { Bitwise: { kind: BitwiseOperation; is_64_bit: boolean } } | { Float: { kind: FloatOperation; is_64_bit: boolean } } | { Conversion: NumericConversionKind } | { DefaultString: string }
 /**
  * Arithmetic operations
  */
@@ -53,7 +55,7 @@ export type ArithmeticOperation = "Addition" | "Subtraction" | "Multiplication" 
  * The kind of byte
  */
 export type ByteKind = "Bits8" | "Bits16" | "Bits32" | "Bits64"
-export type SerializedInstructionNode = { NonBlock: SerializedInstruction } | { SingleBlock: { label: string; inout: InputOutput; is_loop: boolean; inner_nodes: SerializedInstructionNode[] } } | { ConditionalBlock: { label: string; inout: InputOutput; then_nodes: SerializedInstructionNode[]; else_nodes: SerializedInstructionNode[] } }
+export type SerializedInstructionTree = { root: SerializedInstructionNode[]; array: SerializedInstruction[] }
 /**
  * A basic Wa(s)t Function
  * 
@@ -61,7 +63,10 @@ export type SerializedInstructionNode = { NonBlock: SerializedInstruction } | { 
  * Does not work with imported functions, as it assumes nothing about other modules
  */
 export type WastFunc = { info: InputOutput; locals: ([string | null, SerializableWatType])[]; block: SerializedInstructionTree }
-export type NumLocationKind = "Function" | "Global" | "Memory"
+/**
+ * Control flow instructions
+ */
+export type BlockKind = "Block" | "If" | "Else" | "Loop" | "End"
 /**
  * Numeric Conversion Type
  */
@@ -70,17 +75,16 @@ export type NumericConversionKind = "WrapInt" | "SignedTruncF32ToI32" | "Unsigne
  * A number serialized as an array of bytes in big-endian order.
  */
 export type SerializedNumber = { first_bytes: number[]; second_bytes: number[] | null; typ: SerializableWatType }
+export type NodeMark = "Block" | "Loop" | { Conditional: number }
+/**
+ * Simple Instructions
+ */
+export type SimpleInstruction = "Unreachable" | "Nop" | "Drop" | "Return"
+export type NumLocationKind = "Function" | "Global" | "Memory"
+export type GlobalData = { name: string; typ: SerializableWatType; is_mutable: boolean; val: SerializedNumber }
+export type MemoryData = { name: string; min: SerializedNumber; max: SerializedNumber; is_32: boolean; is_shared: boolean; data: number[] }
 /**
  * Represents input and output of a block of instructions.
  * For functions, inputs are parameters and outputs are results.
  */
 export type InputOutput = { index: string | null; input: ([string | null, SerializableWatType])[]; output: SerializableWatType[] }
-export type InterpreterStructure = { name: string; exported: { [key: string]: [NumLocationKind, number] }; globals: GlobalData[]; memory: MemoryData[]; func: WastFunc[] }
-/**
- * Simple Instructions
- */
-export type SimpleInstruction = "Unreachable" | "Nop" | "Drop" | "Return"
-/**
- * Control flow instructions
- */
-export type BlockKind = "Block" | "If" | "Else" | "Loop" | "End"

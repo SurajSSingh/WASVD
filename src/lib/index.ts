@@ -26,6 +26,16 @@ export function deserialize_number(serNumber: command.SerializedNumber): bigint 
     return 0
 }
 
+function formatInOut(inout: command.InputOutput | null, prefix: string = ": "){
+    if(inout){
+        const index = inout.index ? `Index(${inout.index}), ` : "";
+        const params = inout.input.flatMap((x,i) => `${x[0] ?? i.toString()} ${x[1]}`).join(", ");
+        const results = inout.output.join(", ");
+        return `${prefix}${index}Params(${params}), Results(${results})`
+    }
+    return ""
+}
+
 export function instruction_in_plain_english(instruction: command.SerializedInstruction):string {
 
     if ("Simple" in instruction){
@@ -42,7 +52,19 @@ export function instruction_in_plain_english(instruction: command.SerializedInst
                 return `UNKNOWN SIMPLE: ${instruction.Simple}`
         }
     }else if("Block" in instruction){
-        return `${instruction.Block.kind} ${instruction.Block.label}: ${instruction.Block.inout}`;
+        switch (instruction.Block.kind) {
+            case "Block":
+                return `Start New Block ${instruction.Block.label}${formatInOut(instruction.Block.inout)}`
+            case "If":
+                return `Start If block ${instruction.Block.label}${formatInOut(instruction.Block.inout)}`
+            case "Loop":
+                return `Start Loop block ${instruction.Block.label}${formatInOut(instruction.Block.inout)}`
+            case "Else":
+                return `Start Else block ${instruction.Block.label}`
+            case "End":
+                return `End current block ${instruction.Block.label}`
+        }
+        return `Start ${instruction.Block.kind} ${instruction.Block.label}: ${JSON.stringify(instruction.Block.inout)}`;
     }
     else if("Branch" in instruction){
         if(instruction.Branch.other_labels){
