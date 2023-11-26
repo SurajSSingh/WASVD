@@ -49,6 +49,7 @@ impl<Value> ValueMapping<Value> {
     }
 
     /// Get a possible mutable reference to value by its name
+    #[allow(dead_code)]
     pub fn get_mut_by_name(&mut self, name: &str) -> Option<&mut Value> {
         let Some(index) = self.mapping.get(name) else {
             return None;
@@ -61,6 +62,7 @@ impl<Value> ValueMapping<Value> {
     /// Will try to convert the key to an index,
     /// if success, then get by that index,
     /// otherwise, get by name
+    #[allow(dead_code)]
     pub fn get(&self, key: &str) -> Option<&Value> {
         str::parse::<usize>(key).map_or_else(
             |_err| self.get_by_name(key),
@@ -73,6 +75,7 @@ impl<Value> ValueMapping<Value> {
     /// Will try to convert the key to an index,
     /// if success, then get by that index,
     /// otherwise, get by name
+    #[allow(dead_code)]
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
         match str::parse::<usize>(key) {
             Ok(index) => self.get_mut_by_index(index),

@@ -155,7 +155,7 @@ impl MemoryData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 pub struct InterpreterStructure {
     pub(crate) name: String,
     pub(crate) exported: HashMap<String, (NumLocationKind, u32)>,
@@ -404,9 +404,10 @@ impl InterpreterStructure {
     }
 }
 
+/// Primary transformation function
 #[tauri::command]
 #[specta::specta]
-fn transform(text: &str) -> error::WatResult<InterpreterStructure> {
+fn inner_transform(text: &str) -> error::WatResult<InterpreterStructure> {
     // Note: New only builds the buffer and is currently infallible
     let buffer = ParseBuffer::new(text).map_err(WatError::parsing_error)?;
     // Combined lexing and parsing step
@@ -432,6 +433,31 @@ fn transform(text: &str) -> error::WatResult<InterpreterStructure> {
     // Print for debug purposes, it does change module, so need to resolve name separately.
     // println!("{}", wasmprinter::print_bytes(module.encode().unwrap()).unwrap());
     final_result
+}
+
+/// A simple enum to make sure result always succeeds.
+///
+/// Allow the TypeScript side to know about WatError
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+pub enum TransfromResult {
+    Ok(InterpreterStructure),
+    Err(WatError),
+}
+
+impl From<error::WatResult<InterpreterStructure>> for TransfromResult {
+    fn from(value: error::WatResult<InterpreterStructure>) -> Self {
+        match value {
+            Ok(val) => TransfromResult::Ok(val),
+            Err(err) => TransfromResult::Err(err),
+        }
+    }
+}
+
+/// Helper function to auto convert
+#[tauri::command]
+#[specta::specta]
+fn transform(text: &str) -> TransfromResult {
+    inner_transform(text).into()
 }
 
 fn main() {

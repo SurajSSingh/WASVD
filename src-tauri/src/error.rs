@@ -18,7 +18,7 @@ pub enum ErrorStage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type, derive_more::Error)]
 pub struct WatError {
-    span: Option<Range<usize>>,
+    span: Option<Range<u32>>,
     stage: ErrorStage,
     message: Option<String>,
 }
@@ -60,7 +60,7 @@ impl WatError {
     }
 
     pub fn parsing_error(value: wast::Error) -> Self {
-        let offset = value.span().offset();
+        let offset = value.span().offset() as u32;
         Self {
             span: Some(offset..offset + 1),
             stage: ErrorStage::Parsing,
@@ -69,7 +69,7 @@ impl WatError {
     }
 
     pub fn resolution_error(value: wast::Error) -> Self {
-        let offset = value.span().offset();
+        let offset = value.span().offset() as u32;
         Self {
             span: Some(offset..offset + 1),
             stage: ErrorStage::NameResolving,

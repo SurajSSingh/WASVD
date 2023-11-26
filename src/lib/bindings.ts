@@ -10,11 +10,13 @@ declare global {
 // Function avoids 'window not defined' in SSR
 const invoke = () => window.__TAURI_INVOKE__;
 
+/**
+ * Helper function to auto convert
+ */
 export function transform(text: string) {
-    return invoke()<InterpreterStructure>("transform", { text })
+    return invoke()<TransfromResult>("transform", { text })
 }
 
-export type InterpreterStructure = { name: string; exported: { [key: string]: [NumLocationKind, number] }; globals: GlobalData[]; memory: MemoryData[]; func: WastFunc[] }
 /**
  * Memory Instructions
  */
@@ -47,6 +49,15 @@ export type SerializableWatType = "I32" | "I64" | "F32" | "F64" | "V128"
  * but is more generic over types (e.g. a single Add instruction that carries the type).
  */
 export type SerializedInstruction = { Simple: SimpleInstruction } | { Block: { label: string; kind: BlockKind; inout: InputOutput | null } } | { Branch: { default_label: string; other_labels: string[]; is_conditional: boolean } } | { Call: { index: string; inout: InputOutput } } | { Data: { kind: DataInstruction; location: string } } | { Memory: { location: string; typ: SerializableWatType; count: ByteKind; offset: number; alignment: ByteKind; is_storing: boolean } } | { Const: { typ: SerializableWatType; value: SerializedNumber } } | { Comparison: { kind: ComparisonOperation; typ: SerializableWatType } } | { Arithmetic: { kind: ArithmeticOperation; typ: SerializableWatType } } | { Bitwise: { kind: BitwiseOperation; is_64_bit: boolean } } | { Float: { kind: FloatOperation; is_64_bit: boolean } } | { Conversion: NumericConversionKind } | { DefaultString: string }
+/**
+ * A simple enum to make sure result always succeeds.
+ * 
+ * Allow the TypeScript side to know about WatError
+ */
+export type TransfromResult = { Ok: InterpreterStructure } | { Err: WatError }
+export type WatError = { span: { start: number; end: number } | null; stage: ErrorStage; message: string | null }
+export type ErrorStage = "Parsing" | "TypeChecking" | "NameResolving" | "Unimplemented"
+export type InterpreterStructure = { name: string; exported: { [key: string]: [NumLocationKind, number] }; globals: GlobalData[]; memory: MemoryData[]; func: WastFunc[] }
 /**
  * Arithmetic operations
  */
