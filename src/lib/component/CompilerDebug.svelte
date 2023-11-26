@@ -1,12 +1,11 @@
 <script lang="ts">
-    import {watStructure} from "$lib/store"
-    export let compError:  object | null = null;
+    import {watStructure, compErr} from "$lib/store"
 
 </script>
 
 <section class=" bg-slate-100">
-    {#if compError}
-        <p class=" bg-error-700">{JSON.stringify(compError, null, 4)}</p>
+    {#if $compErr}
+        <p class=" bg-error-700">{JSON.stringify($compErr, null, 4)}</p>
     {:else if $watStructure}
         <p class=" bg-success-700">{JSON.stringify($watStructure, null, 4)}</p>
     {:else}

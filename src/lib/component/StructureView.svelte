@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { deserialize_number } from "$lib";
-    import {watStructure} from "$lib/store"
+    import {watStructure, compErr} from "$lib/store"
 	import InstructionBlock from "$lib/component/InstructionBlock.svelte";
 
 </script>
 
-<section class=" bg-slate-100 m-1 p-1">
+<div class=" bg-slate-100 m-1 p-1">
     {#if $watStructure}
         <section class=" text-black">
             {#each Object.entries($watStructure.exported) as [name, [kind, index]], _ (name)}
@@ -61,7 +61,13 @@
                 {/if}
             {/each}
         </section>
+    {:else if $compErr}
+    <section class=" text-black">
+        <p class="text-error-500">Error occured!</p>
+        <p>Kind: {$compErr.stage} @{$compErr.span ? `${$compErr.span.start} to ${$compErr.span.end}` : "Unknown"}</p>
+        <p>Message: {$compErr.message}</p>
+    </section>
     {:else}
         <p class="text-black">No Output (Compile code first)</p>
     {/if}
-</section>
+</div>

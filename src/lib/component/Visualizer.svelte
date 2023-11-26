@@ -5,7 +5,8 @@
 	import { exec_instructions, type EvalResult, type MyError, type WasmData } from '$lib/interpreter';
     import type * as command from '$lib/bindings';
     import { watStructure } from "$lib/store";
-	import Pres from './Pres.svelte';
+	import Simulator from './Simulator.svelte';
+	import { Accordion, AccordionItem } from '@skeletonlabs/skeleton';
 
     let funcSelect: number = -1;
     let steps: { result: EvalResult; previous: (number | bigint)[]; current: (number | bigint)[] }[] =
@@ -64,49 +65,131 @@
 </script>
 
 <div class="h-full overflow-auto">
-    <h2>Visualizer</h2>
-    <span>Selected: {funcSelect}</span>
-    <section class="card">
-        <h3 class="card-header">Globals</h3>
-        {#if $watStructure}
-            <div class="table-container">
-                <table class="table table-hover">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Type</th>
-                            <th>Is Mutable?</th>
-                            <th>Value</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {#each $watStructure.globals as g}
-                            <tr>
-                                <td>{g.name} ()</td>
-                                <td>{g.typ}</td>
-                                <td>{g.is_mutable}</td>
-                                <td>
-                                    {deserialize_number(g.val)}
-                                </td>
-                            </tr>
-                        {/each}
-                    </tbody>
-                </table>
-            </div>
-        {/if}
-    </section>
-    <section class="card">
-        {#if $watStructure}
-            {#each Object.entries($watStructure.exported) as [name, [kind, index]], _ (name)}
-                {#if kind === 'Memory'}
-                    {@const f = $watStructure.func.at(index)}
-                    {#if f}
-                        <option value={index}>{f.info.index ?? name}</option>
+    <h2 class="text-center">Visualizer</h2>
+    <Accordion>
+        <AccordionItem>
+            <!-- <svelte:fragment slot="lead">(icon)</svelte:fragment> -->
+			<svelte:fragment slot="summary">Globals</svelte:fragment>
+			<svelte:fragment slot="content">
+                <section class="card">
+                    <!-- <h3 class="card-header">Globals</h3> -->
+                    {#if $watStructure}
+                        <div class="table-container">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Index</th>
+                                        <th>Name</th>
+                                        <th>Type</th>
+                                        <th>Is Mutable?</th>
+                                        <th>Value</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {#each $watStructure.globals as g, i}
+                                        <tr>
+                                            <td>{i}</td>
+                                            <td>{g.name}</td>
+                                            <td>{g.typ}</td>
+                                            <td>{g.is_mutable}</td>
+                                            <td>
+                                                {deserialize_number(g.val)}
+                                            </td>
+                                        </tr>
+                                    {/each}
+                                </tbody>
+                            </table>
+                        </div>
                     {/if}
+                </section>
+			</svelte:fragment>
+        </AccordionItem>
+        <AccordionItem>
+            <!-- <svelte:fragment slot="lead">(icon)</svelte:fragment> -->
+			<svelte:fragment slot="summary">Memory</svelte:fragment>
+			<svelte:fragment slot="content">
+                <section class="card">
+                    {#if $watStructure}
+                    <div class="table-container">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Index</th>
+                                    <th>Name</th>
+                                    <th>Is 32-bit</th>
+                                    <th>Is Shared</th>
+                                    <th>Min Size</th>
+                                    <th>Max Size</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {#each Object.entries($watStructure.exported) as [name, [kind, index]], _ (name)}
+                                {#if kind === 'Memory'}
+                                {@const m = $watStructure.memory.at(index)}
+                                {#if m}
+                                <tr>
+                                    <td>{index}</td>
+                                    <td>{m.name}</td>
+                                    <td>{m.is_32}</td>
+                                    <td>{m.is_shared}</td>
+                                    <td>
+                                        {deserialize_number(m.min)}
+                                    </td>
+                                    <td>
+                                        {deserialize_number(m.max)}
+                                    </td>
+                                </tr>
+                                {/if}
+                                {/if}
+                                {/each}
+                            </tbody>
+                        </table>
+                    </div>
+                    {/if}
+                </section>
+			</svelte:fragment>
+        </AccordionItem>
+        <AccordionItem>
+            <!-- <svelte:fragment slot="lead">(icon)</svelte:fragment> -->
+			<svelte:fragment slot="summary">Exported Functions</svelte:fragment>
+			<svelte:fragment slot="content">
+                <section class="card">
+                    {#if $watStructure}
+                    <div class="table-container">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Inputs</th>
+                                    <th>Locals</th>
+                                    <th>Instruction Count</th>
+                                    <th>Results</th>
+                                </tr>
+                            </thead>
+                        <tbody>
+                            {#each Object.entries($watStructure.exported) as [name, [kind, index]], _ (name)}
+                            {#if kind === 'Function'}
+                            {@const f = $watStructure.func.at(index)}
+                            {#if f}
+                                <tr>
+                                    <td>{f.info.index}</td>
+                                    <td>{JSON.stringify(f.info.input)}</td>
+                                    <td>{JSON.stringify(f.locals)}</td>
+                                    <td>{f.block.array.length}</td>
+                                    <td>{JSON.stringify(f.info.output)}</td>
+                                </tr>
+                            {/if}
+                            {/if}
+                            {/each}
+                        </tbody>
+                    </table>
+                </div>
                 {/if}
-            {/each}
-        {/if}
-    </section>
+                </section>
+			</svelte:fragment>
+        </AccordionItem>
+    </Accordion>
+    <h3>Function Simulator</h3>
     <label class="label">
         <span>Choose Function</span>
         <select bind:value={funcSelect} class="select">
@@ -148,11 +231,11 @@
                 {/each}
                 </section>
             </div>
-            <button on:click={() => run(f)} class="bg-primary-500 p-2">Run</button>
+            <button on:click={() => run(f)} class="btn btn-md bg-primary-500">Run</button>
             <hr />
             {#if steps.length > 0}
-            <div class="h-2/3">
-                <Pres steps={steps}/>
+            <div class="h-1/3">
+                <Simulator steps={steps}/>
             </div>
             {/if}
             {#if stepError}

@@ -5,9 +5,9 @@
 	import {
 		deserialize_number,
 	} from '$lib';
-	import { TabGroup, Tab } from '@skeletonlabs/skeleton';
+	import { TabGroup, Tab, Accordion, AccordionItem } from '@skeletonlabs/skeleton';
 	import InstructionBlock from './InstructionBlock.svelte';
-	import {watStructure} from "$lib/store"
+	import {watStructure, compErr} from "$lib/store"
 	import CompilerDebug from './CompilerDebug.svelte';
 	import StructureView from './StructureView.svelte';
 
@@ -19,12 +19,11 @@
 	)
 )`;
 	let tabSet: number = 0;
-	let compError: object | null = null;
 	let currentResult: "✅" | "❌" | "❔" = "❔";
 
 	function reset(){
 		watStructure.set(null);
-		compError = null;
+		compErr.set(null);
 		currentResult = "❔";
 	}
 
@@ -33,13 +32,18 @@
 		command
 			.transform(text)
 			.then((res) => {
-				currentResult = "✅";
-				console.log(res);
-				watStructure.set(res);
+				if("Ok" in res){
+					currentResult = "✅";
+					watStructure.set(res.Ok);
+				}
+				else {
+					currentResult = "❌";
+					compErr.set(res.Err)
+				}
 			})
 			.catch((err) => {
-				currentResult = "❌";
-				compError = err;
+				// Some other failure happened!
+				console.log(err)
 			});
 	}
 
@@ -47,21 +51,32 @@
 
 
 <div class="h-full overflow-auto">
-	<button on:click={compile} class="bg-primary-400 p-2">Compile</button>
+	<h2 class="text-center">Editor</h2>
 	<TabGroup>
-		<Tab bind:group={tabSet} name="tab1" value={0}>
-			{currentResult}Editor
-		</Tab>
-		<Tab bind:group={tabSet} name="tab2" value={1}>Exported View</Tab>
-		<Tab bind:group={tabSet} name="tab3" value={2}>Raw Structure</Tab>
+		<Tab bind:group={tabSet} name="tab1" value={0}>Editor Tab</Tab>
+		<Tab bind:group={tabSet} name="tab2" value={1}>Raw Results</Tab>
 		<!-- Tab Panels --->
 		<svelte:fragment slot="panel">
 			{#if tabSet === 0}
-				<CodeMirror bind:value={text} on:change={() => currentResult="❔"} lang={wast()} class=" bg-slate-100 text-black" />
+			<Accordion>
+				<AccordionItem open>
+					<svelte:fragment slot="lead">{currentResult}</svelte:fragment>
+					<svelte:fragment slot="summary">Editor</svelte:fragment>
+					<svelte:fragment slot="content">
+						<button on:click={compile} class="btn btn-md bg-primary-500">Compile</button>
+						<CodeMirror bind:value={text} on:change={() => currentResult="❔"} lang={wast()} class=" bg-slate-100 text-black" />
+					</svelte:fragment>
+				</AccordionItem>
+				<AccordionItem open>
+					<!-- <svelte:fragment slot="lead">(icon)</svelte:fragment> -->
+					<svelte:fragment slot="summary">Result</svelte:fragment>
+					<svelte:fragment slot="content">
+						<StructureView />
+					</svelte:fragment>
+				</AccordionItem>
+			</Accordion>
 			{:else if tabSet === 1}
-				<StructureView />
-			{:else if tabSet === 2}
-				<CompilerDebug {compError}/>
+				<CompilerDebug />
 			{/if}
 		</svelte:fragment>
 	</TabGroup>
