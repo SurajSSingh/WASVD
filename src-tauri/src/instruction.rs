@@ -981,6 +981,13 @@ impl SerializedInstructionNode {
     }
 }
 
+pub fn conditional_else_not_assigned(node: &SerializedInstructionNode) -> bool {
+    match node.kind {
+        NodeMark::Conditional(0) => true,
+        _ => false,
+    }
+}
+
 pub fn linear_instructions_to_tree(
     func_label: &str,
     linear_instructions: &Vec<SerializedInstruction>,
@@ -1009,9 +1016,25 @@ pub fn linear_instructions_to_tree(
                         node_start_stack.push((nodes.len() - 1) as u32);
                     }
                     BlockKind::Else => {
+                        // If is gaurenteed to be there from parsing step
+                        // Find the "if" closest to the end that has not already been set
+                        let conditional_stack_number = nodes
+                            .iter()
+                            .rev()
+                            .position(conditional_else_not_assigned)
+                            .unwrap();
+
+                        let if_node_position = nodes.len() - 1 - conditional_stack_number;
                         nodes
-                            .last_mut()
-                            .map(|node| node.set_else(index).set_end(index));
+                            .get_mut(if_node_position)
+                            // nodes.last_mut()
+                            .map(|node| {
+                                if matches!(node.kind, NodeMark::Conditional(_)) {
+                                    node.set_else(index).set_end(index)
+                                } else {
+                                    panic!("Got: {:?}", node)
+                                }
+                            });
                     }
                     BlockKind::End => {
                         // nodes.last_mut().map(|node| node.set_end(index as u32));
