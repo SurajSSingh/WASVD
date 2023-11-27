@@ -25,6 +25,7 @@ export type DataInstruction = "GetLocal" | "GetGlobal" | "SetLocal" | "SetGlobal
  * Comparison operations
  */
 export type ComparisonOperation = "EqualZero" | "Equal" | "NotEqual" | "LessThenSigned" | "LessThenUnsigned" | "GreaterThenSigned" | "GreaterThenUnsigned" | "LessThenOrEqualToSigned" | "LessThenOrEqualToUnsigned" | "GreaterThenOrEqualToSigned" | "GreaterThenOrEqualToUnsigned"
+export type SerializedInstructionTree = { root: SerializedInstructionNode[]; array: SerializedInstruction[] }
 /**
  * A node representing the instruction block.
  */
@@ -66,7 +67,6 @@ export type ArithmeticOperation = "Addition" | "Subtraction" | "Multiplication" 
  * The kind of byte
  */
 export type ByteKind = "Bits8" | "Bits16" | "Bits32" | "Bits64"
-export type SerializedInstructionTree = { root: SerializedInstructionNode[]; array: SerializedInstruction[] }
 /**
  * A basic Wa(s)t Function
  * 

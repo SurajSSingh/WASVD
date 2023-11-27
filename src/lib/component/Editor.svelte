@@ -43,7 +43,7 @@
 			})
 			.catch((err) => {
 				// Some other failure happened!
-				console.log(err)
+				console.error(err);
 			});
 	}
 

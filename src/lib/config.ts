@@ -53,6 +53,11 @@ const options: Reveal.Options = {
 	hideCursorTime: 5000,
 	// show current slide
 	hash: true,
+	// Customizations
+	// Slide number format
+	slideNumber: "c/t",
+	respondToHashChanges: true,
+	embedded: true,
 }
 
 export default options

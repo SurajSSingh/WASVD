@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte'
+	import { revealDeck } from '$lib/store';
+	import { onDestroy, onMount } from 'svelte'
 	// import Reveal from 'reveal.js'
 	// import options from '$lib/config'
 
@@ -58,6 +59,7 @@
 			// we pass the language to the `<Code>` block
 			// and higlight code blocks after initialization
 			highlightCodeBlocks(deck)
+			revealDeck.set(deck);
 		})
 
 		// reload page after update to avoid HMR issues
@@ -82,6 +84,10 @@
 			})
 		}
 	}
+
+	onDestroy(() => {
+		revealDeck.set(null);
+	})
 </script>
 
 <div class="h-1/2 relative overflow-hidden touch-pinch-zoom reveal">

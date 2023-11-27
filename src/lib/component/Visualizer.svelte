@@ -1,8 +1,7 @@
 <script lang="ts">
-    import { onDestroy, onMount } from 'svelte';
-	import { Presentation, Slide } from '$lib/animotion/components';
+    import { onDestroy} from 'svelte';
 	import { deserialize_number } from '$lib';
-	import { exec_instructions, type EvalResult, type MyError, type WasmData } from '$lib/interpreter';
+	import { exec_instructions, type EvalResult, type MyError, type WasmData, type VariableTableType } from '$lib/interpreter';
     import type * as command from '$lib/bindings';
     import { watStructure } from "$lib/store";
 	import Simulator from './Simulator.svelte';
@@ -13,7 +12,10 @@
 		[];
 	let stepError: MyError | null = null;
     let data: WasmData = {
-        globals: {},
+        globals: {
+            values: [],
+            mapping: {},
+        },
         memory: {},
         functions: [],
     };
@@ -27,11 +29,16 @@
 
     let unsubscribe = watStructure.subscribe((structure) => {
         reset();
-        for (const global of structure?.globals??[]) {
-            data.globals[global.name] = deserialize_number(global.val);
-        }
-        for (const memory of structure?.memory??[]) {
-            data.memory[memory.name] = memory.data;
+        if(structure){
+            for (let index = 0; index < structure.globals.length; index++) {
+                const global = structure.globals[index];
+                data.globals.mapping[global.name] = index;
+                data.globals.values[index] = deserialize_number(global.val);
+                
+            }
+            for (const memory of structure.memory??[]) {
+                data.memory[memory.name] = memory.data;
+            }
         }
     })
     onDestroy(() => {
@@ -39,9 +46,28 @@
     })
 
     function run(func: command.WastFunc) {
+        steps = [];
+        stepError = null;
         // let locals = func.info.input.map(())
-        let local_names = func.info.input.concat(func.locals);
-		const result = exec_instructions(func.block, data, {});
+        let locals: VariableTableType = {
+            values: [],
+            mapping: {}
+        };
+        func.info.input.concat(func.locals).forEach(([name, _type], index) => {
+            let value = 0;
+            // Local has name
+            if(name){
+                value = params[name] ?? value;
+                locals.mapping[name] = index
+            }
+            // Local is just index
+            else {
+                value = params[index.toString()] ?? value;
+            }
+            locals.values[index] = value;
+            // locals[indexName] = value;
+        });
+		const result = exec_instructions(func.block, data, locals);
 		if ('message' in result) {
 			stepError = result;
 			steps = [];
@@ -49,19 +75,7 @@
 			stepError = null;
 			steps = result;
 		}
-		console.log(steps);
 	}
-
-    // let Animation;
-	// let Presentation: any;
-	// let Slide: any;
-
-	// onMount(async () => {
-	// 	Animation = (await import("$lib/animotion/components/index"));
-	// 	Presentation = Animation.Presentation;
-	// 	Slide = Animation.Slide;
-	// 	console.log(Presentation);
-	// })
 </script>
 
 <div class="h-full overflow-auto">
@@ -216,9 +230,9 @@
                 <section class="p-4 overflow-auto">
                     <h3>Parameters</h3>
                     {#each f.info.input as p, index}
-                        {@const name = p[0] ? p[0] + `(${index})` : index.toString()}
+                        {@const name = p[0] ?? index.toString()}
                         <label class="label">
-                            <span>Parameter {name} : {p[1]} = </span>
+                            <span>Parameter {name + `(${index})`} : {p[1]} = </span>
                             <input id="number" type="number" bind:value="{params[name]}" class=" bg-slate-800" />
                         </label>
                     {/each}
@@ -232,11 +246,8 @@
                 </section>
             </div>
             <button on:click={() => run(f)} class="btn btn-md bg-primary-500">Run</button>
-            <hr />
             {#if steps.length > 0}
-            <div class="h-1/3">
-                <Simulator steps={steps}/>
-            </div>
+            <Simulator steps={steps}/>
             {/if}
             {#if stepError}
                  <p>{stepError.message}</p>

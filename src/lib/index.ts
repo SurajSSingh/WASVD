@@ -283,8 +283,8 @@ export function instruction_in_plain_english(instruction: command.SerializedInst
         }
         return `Pop top ${number_to_pop} ${instruction.Float.is_64_bit ? "I64" : "I32"} ${number_to_pop === 1? "value" : "values"} from stack, push ${operation} to stack.`
     }
-    else if("Cast" in instruction){
-        switch(instruction.Cast){
+    else if("Conversion" in instruction){
+        switch(instruction.Conversion){
             case "WrapInt":
                 return "Wrap I64 to I32."
             case "SignedTruncF32ToI32":
