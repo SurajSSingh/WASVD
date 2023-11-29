@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use wast::token::{Float32, Float64};
 
-use crate::marker::SerializableWatType;
+use crate::{error::WatError, marker::SerializableWatType};
 
 macro_rules! four_byte_array {
     ($array:ident, $start:literal) => {
@@ -81,5 +81,20 @@ where
 {
     fn from(value: &T) -> Self {
         SerializedNumber::from(*value)
+    }
+}
+
+impl TryFrom<SerializedNumber> for u32 {
+    type Error = WatError;
+
+    fn try_from(value: SerializedNumber) -> Result<Self, Self::Error> {
+        if value
+            .second_bytes
+            .is_some_and(|bytes| bytes.iter().any(|x| x != &0))
+        {
+            Err(WatError::number_to_large(&value))
+        } else {
+            Ok(u32::from_be_bytes(value.first_bytes))
+        }
     }
 }

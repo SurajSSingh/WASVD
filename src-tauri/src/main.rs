@@ -7,7 +7,7 @@ use specta::Type;
 use std::collections::HashMap;
 use wast::{
     self,
-    core::{Expression, Func, Local, ModuleField},
+    core::{DataVal, Expression, Func, Local, ModuleField},
     parser::{self, ParseBuffer},
     token::Id,
     Wat,
@@ -20,7 +20,7 @@ mod marker;
 mod validator;
 
 use error::{WatError, WatResult};
-use instruction::{InputOutput, SerializedInstruction, SerializedInstructionTree};
+use instruction::{index_to_string, InputOutput, SerializedInstruction, SerializedInstructionTree};
 use validator::Validator;
 
 use marker::SerializableWatType;
@@ -93,6 +93,7 @@ pub enum NumLocationKind {
     Function,
     Global,
     Memory,
+    Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
@@ -103,6 +104,22 @@ pub struct GlobalData {
     val: SerializedNumber,
 }
 
+pub fn const_eval_expr(
+    instrs: &[SerializedInstruction],
+    expected_type: Option<SerializableWatType>,
+) -> WatResult<SerializedNumber> {
+    match instrs[..] {
+        [SerializedInstruction::Const { typ, value }]
+            if expected_type.is_some_and(|t| typ == t) =>
+        {
+            Ok(value.clone())
+        }
+        [SerializedInstruction::Const { typ, value }] => Ok(value.clone()),
+        [] => Err(WatError::no_instruction_provided("Const")),
+        _ => Err(WatError::non_initializer_expression()),
+    }
+}
+
 impl GlobalData {
     pub fn try_new(
         name: String,
@@ -110,15 +127,52 @@ impl GlobalData {
         is_mutable: bool,
         instructions: Vec<SerializedInstruction>,
     ) -> WatResult<Self> {
-        match instructions.as_slice() {
-            [SerializedInstruction::Const { typ, value }] if typ == &gtyp => Ok(Self {
-                name,
-                typ: gtyp,
-                is_mutable,
-                val: *value,
-            }),
-            [] => Err(WatError::no_instruction_provided("Const")),
-            _ => Err(WatError::non_initializer_expression()),
+        Ok(Self {
+            name,
+            typ: gtyp,
+            is_mutable,
+            val: const_eval_expr(&instructions, Some(gtyp))?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+pub struct DataValue {
+    id: String,
+    is_string: bool,
+    data: Vec<u8>,
+}
+
+impl From<DataVal<'_>> for DataValue {
+    fn from(value: DataVal) -> Self {
+        match value {
+            DataVal::String(s) => Self {
+                id: String::default(),
+                is_string: true,
+                data: s.to_vec(),
+            },
+            DataVal::Integral(i) => Self {
+                id: String::default(),
+                is_string: false,
+                data: i,
+            },
+        }
+    }
+}
+
+impl DataValue {
+    pub fn clone_from(value: &DataVal) -> Self {
+        match value {
+            DataVal::String(s) => Self {
+                id: String::default(),
+                is_string: true,
+                data: s.to_vec(),
+            },
+            DataVal::Integral(i) => Self {
+                id: String::default(),
+                is_string: false,
+                data: i.to_vec(),
+            },
         }
     }
 }
@@ -130,7 +184,7 @@ pub struct MemoryData {
     max: SerializedNumber,
     is_32: bool,
     is_shared: bool,
-    data: Vec<u8>,
+    data: HashMap<u32, DataValue>,
 }
 
 impl MemoryData {
@@ -140,7 +194,7 @@ impl MemoryData {
         max: Option<i64>,
         is_32: bool,
         is_shared: bool,
-        data: Vec<u8>,
+        data: HashMap<u32, DataValue>,
     ) -> Self {
         let min = min.into();
         let max = max.into();
@@ -161,106 +215,30 @@ pub struct InterpreterStructure {
     pub(crate) exported: HashMap<String, (NumLocationKind, u32)>,
     pub(crate) globals: Vec<GlobalData>,
     pub(crate) memory: Vec<MemoryData>,
+    // Data not currently bound to a specific memory location
+    pub(crate) free_data: Vec<DataValue>,
     pub(crate) func: Vec<WastFunc>,
+    /// Optional start function for initalization
+    pub(crate) start: Option<String>,
 }
 
 impl InterpreterStructure {
+    const PAGE_SIZE_AS_BYTES: u32 = 65536;
+
     /// Try to create a new interpreter structure
     pub fn try_new(_text: &str, fields: &[ModuleField], name: &Option<Id>) -> WatResult<Self> {
-        let mut exported = HashMap::new();
-        let mut globals = Vec::new();
-        let mut memory = Vec::new();
-        let mut func = Vec::new();
+        let mut exported: HashMap<String, (NumLocationKind, u32)> = HashMap::new();
+        let mut globals: Vec<GlobalData> = Vec::new();
+        let mut memory: Vec<MemoryData> = Vec::new();
+        let mut free_data: Vec<DataValue> = Vec::new();
+        let mut func: Vec<WastFunc> = Vec::new();
+        let mut start = None;
+        // let mut passive_data = Vec::new();
+        // let mut active_data = Vec::new();
         // let mut start = 0;
         for (_i, field) in fields.iter().enumerate() {
             match field {
-                ModuleField::Func(f) => {
-                    for name in &f.exports.names {
-                        exported
-                            .insert(
-                                name.to_string(),
-                                (NumLocationKind::Function, func.len() as u32),
-                            )
-                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(name)))?;
-                    }
-                    let mut function = WastFunc::try_from(f)?;
-                    if function.name().is_none() {
-                        function.set_name_from_number(func.len())
-                    };
-                    func.push(function);
-                }
-                ModuleField::Memory(m) => {
-                    for name in &m.exports.names {
-                        exported
-                            .insert(
-                                name.to_string(),
-                                (NumLocationKind::Memory, memory.len() as u32),
-                            )
-                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(name)))?;
-                    }
-                    match &m.kind {
-                        wast::core::MemoryKind::Import { import: _, ty: _ } => {
-                            Err(error::WatError::unimplemented_error(
-                                "Imported memory not yet implemented.",
-                            ))?
-                        }
-                        wast::core::MemoryKind::Normal(mt) => match mt {
-                            wast::core::MemoryType::B32 { limits, shared } => {
-                                memory.push(MemoryData::new(
-                                    m.id.map(|id| id.name().to_string()).unwrap_or_default(),
-                                    limits.min as i64,
-                                    limits.max.map(|n| n as i64),
-                                    true,
-                                    *shared,
-                                    Vec::new(),
-                                ));
-                            }
-                            wast::core::MemoryType::B64 { limits, shared } => {
-                                memory.push(MemoryData::new(
-                                    m.id.map(|id| id.name().to_string()).unwrap_or_default(),
-                                    limits.min as i64,
-                                    limits.max.map(|i| i as i64),
-                                    false,
-                                    *shared,
-                                    Vec::new(),
-                                ));
-                            }
-                        },
-                        wast::core::MemoryKind::Inline { is_32: _, data: _ } => {
-                            Err(error::WatError::unimplemented_error(
-                                "Inline memory not yet implemented.",
-                            ))?
-                        }
-                    }
-                }
-                ModuleField::Global(g) => {
-                    for name in &g.exports.names {
-                        exported
-                            .insert(
-                                name.to_string(),
-                                (NumLocationKind::Global, globals.len() as u32),
-                            )
-                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(name)))?;
-                    }
-                    match &g.kind {
-                        wast::core::GlobalKind::Import(_) => {
-                            Err(error::WatError::unimplemented_error(
-                                "Imported globals not yet implemented.",
-                            ))?
-                        }
-                        wast::core::GlobalKind::Inline(e) => {
-                            globals.push(GlobalData::try_new(
-                                g.id.map(|id| id.name().to_string()).unwrap_or_default(),
-                                g.ty.ty.try_into()?,
-                                g.ty.mutable,
-                                e.instrs
-                                    .iter()
-                                    .map(|ins| ins.try_into())
-                                    .collect::<Result<_, _>>()?,
-                            )?);
-                        }
-                    }
-                }
+                ModuleField::Import(_) => unimplemented!("Import field not implemented"),
                 ModuleField::Export(e) => match e.kind {
                     wast::core::ExportKind::Func => {
                         for (i, f) in func.iter().enumerate() {
@@ -307,16 +285,178 @@ impl InterpreterStructure {
                     wast::core::ExportKind::Table => todo!("Export Tables not implemented"),
                     wast::core::ExportKind::Tag => todo!("Export Tags not implemented"),
                 },
-                ModuleField::Type(_) => todo!("Type field not implemented"),
-                ModuleField::Data(_) => {
-                    todo!("Data field not implemented")
+                ModuleField::Global(g) => {
+                    for name in &g.exports.names {
+                        exported
+                            .insert(
+                                name.to_string(),
+                                (NumLocationKind::Global, globals.len() as u32),
+                            )
+                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(name)))?;
+                    }
+                    match &g.kind {
+                        wast::core::GlobalKind::Import(_) => {
+                            Err(error::WatError::unimplemented_error(
+                                "Imported globals not yet implemented.",
+                            ))?
+                        }
+                        wast::core::GlobalKind::Inline(e) => {
+                            globals.push(GlobalData::try_new(
+                                g.id.map(|id| id.name().to_string()).unwrap_or_default(),
+                                g.ty.ty.try_into()?,
+                                g.ty.mutable,
+                                e.instrs
+                                    .iter()
+                                    .map(|ins| ins.try_into())
+                                    .collect::<Result<_, _>>()?,
+                            )?);
+                        }
+                    }
                 }
-                ModuleField::Table(_) => todo!("Table field not implemented"),
-                ModuleField::Start(_) => todo!("Start field not implemented"),
+                ModuleField::Func(f) => {
+                    for name in &f.exports.names {
+                        exported
+                            .insert(
+                                name.to_string(),
+                                (NumLocationKind::Function, func.len() as u32),
+                            )
+                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(name)))?;
+                    }
+                    let mut function = WastFunc::try_from(f)?;
+                    if function.name().is_none() {
+                        function.set_name_from_number(func.len())
+                    };
+                    func.push(function);
+                }
+                ModuleField::Start(s) => {
+                    // Parsing gaurentees only one start
+                    start = Some(index_to_string(s));
+                }
+                ModuleField::Memory(m) => {
+                    let mem_name = m.id.map(|id| id.name().to_string()).unwrap_or_default();
+                    for name in &m.exports.names {
+                        exported
+                            .insert(
+                                name.to_string(),
+                                (NumLocationKind::Memory, memory.len() as u32),
+                            )
+                            .map_or(Ok(()), |_| Err(WatError::duplicate_name_error(name)))?;
+                    }
+                    match &m.kind {
+                        wast::core::MemoryKind::Import { import: _, ty: _ } => {
+                            Err(error::WatError::unimplemented_error(
+                                "Imported memory not yet implemented.",
+                            ))?
+                        }
+                        wast::core::MemoryKind::Normal(mt) => match mt {
+                            wast::core::MemoryType::B32 { limits, shared } => {
+                                memory.push(MemoryData::new(
+                                    mem_name,
+                                    limits.min as i64,
+                                    limits.max.map(|n| n as i64),
+                                    true,
+                                    *shared,
+                                    HashMap::new(),
+                                ));
+                            }
+                            wast::core::MemoryType::B64 { limits, shared } => {
+                                memory.push(MemoryData::new(
+                                    mem_name,
+                                    limits.min as i64,
+                                    limits.max.map(|i| i as i64),
+                                    false,
+                                    *shared,
+                                    HashMap::new(),
+                                ));
+                            }
+                        },
+                        wast::core::MemoryKind::Inline { is_32, data } => {
+                            // Size calculated from data
+                            let (final_offset, data) = data
+                                .iter()
+                                .map(|val| DataValue::clone_from(val))
+                                .fold((0 as u32, HashMap::new()), |(offset, mut map), val| {
+                                    let next_offset = offset + val.data.len() as u32;
+                                    map.insert(offset, val);
+                                    // Next offset = prev offset + len of curr val
+                                    (next_offset, map)
+                                });
+                            // Mem size gives exact size by page size, rounded up
+                            let mem_size = final_offset / Self::PAGE_SIZE_AS_BYTES
+                                + if final_offset % Self::PAGE_SIZE_AS_BYTES != 0 {
+                                    1
+                                } else {
+                                    0
+                                };
+                            memory.push(MemoryData::new(
+                                mem_name,
+                                0,
+                                Some(mem_size as i64),
+                                *is_32,
+                                false,
+                                data,
+                            ));
+                        }
+                    }
+                }
+                ModuleField::Data(d) => {
+                    // d.data
+                    // d.id
+                    let id = d.id.map_or(String::default(), |id| id.name().to_string());
+                    let data = d
+                        .data
+                        .iter()
+                        .flat_map(|val| match val {
+                            DataVal::String(s) => s.to_vec(),
+                            DataVal::Integral(i) => i.to_vec(),
+                        })
+                        .collect();
+                    match &d.kind {
+                        // Passive = exist but not yet loaded to memory -> put in free data
+                        wast::core::DataKind::Passive => free_data.push(DataValue {
+                            id,
+                            is_string: d.data.iter().all(|v| matches!(v, DataVal::String(_))),
+                            data,
+                        }),
+                        // Active = load directly to memory -> put in memory (or wait until memory is initalized)
+                        wast::core::DataKind::Active {
+                            memory: idx,
+                            offset,
+                        } => {
+                            let mem_name = index_to_string(idx);
+                            // Memory already defined
+                            if let Some(mem) = memory
+                                .iter_mut()
+                                .find(|m| !m.name.is_empty() && m.name == mem_name)
+                            {
+                                let expr = offset
+                                    .instrs
+                                    .iter()
+                                    .map(|inst| inst.try_into())
+                                    .collect::<Result<Vec<_>, _>>()?;
+                                mem.data.insert(
+                                    const_eval_expr(&expr, None)?.try_into()?,
+                                    DataValue {
+                                        id,
+                                        is_string: d
+                                            .data
+                                            .iter()
+                                            .all(|dv| matches!(dv, DataVal::String(_))),
+                                        data,
+                                    },
+                                );
+                            } else {
+                                // TODO: Possibly add a temporary hashmap that will store data before memory creation
+                                Err(WatError::unimplemented_error(&format!("Currently cannot add data to memory not already defined: memory {} is not defined at this point", mem_name)))?
+                            }
+                        }
+                    }
+                }
+                ModuleField::Type(_) => todo!("Type field not implemented"),
                 ModuleField::Rec(_) => todo!("Rec field not implemented"),
+                ModuleField::Table(_) => todo!("Table field not implemented"),
                 ModuleField::Elem(_) => todo!("Element field not implemented"),
                 ModuleField::Tag(_) => todo!("Tag field not implemented"),
-                ModuleField::Import(_) => unimplemented!("Import field not implemented"),
                 ModuleField::Custom(_) => todo!("Custom field not implemented"),
             }
         }
@@ -325,7 +465,9 @@ impl InterpreterStructure {
             exported,
             globals,
             memory,
+            free_data,
             func,
+            start,
         };
         interp_struct.validate()?;
         Ok(interp_struct)

@@ -4,7 +4,7 @@ use std::{fmt::Display, ops::Range};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::{marker::SerializableWatType, NumLocationKind};
+use crate::{helper::SerializedNumber, marker::SerializableWatType, NumLocationKind};
 
 pub type WatResult<T> = Result<T, WatError>;
 
@@ -238,6 +238,17 @@ impl WatError {
             span: None,
             stage: ErrorStage::TypeChecking,
             message: Some(format!("Expect stack to be empty, but found: {found}.")),
+        }
+    }
+
+    pub fn number_to_large(number: &SerializedNumber) -> Self {
+        Self {
+            span: None,
+            stage: ErrorStage::TypeChecking,
+            message: Some(format!(
+                "The number provided cannot fit in u32: {:?}",
+                number
+            )),
         }
     }
 }
