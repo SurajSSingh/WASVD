@@ -20,8 +20,6 @@
         stroke: "red",
         value:restValue
     };
-                    
-    $: finalSignal = stacks[0];
 </script>
 
 <svg class="w-full h-[400px] mx-auto bg-primary-800" viewBox="0 0 800 800">

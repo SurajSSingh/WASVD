@@ -32,7 +32,11 @@ export type StackSVGInitializer = {
     yTopWorking: number,
     xWorkingOffset: number,
     operatorSize?: number,
-    defaultData?: Partial<SVGStackObjData>
+    workingData?: Partial<SVGStackObjData>,
+    operatorData?: Partial<SVGStackObjData>,
+    stackData?: Partial<SVGStackObjData>,
+    restData?: Partial<SVGStackObjData>,
+    defaultData?: Partial<SVGStackObjData>,
 };
 
 // Type developed from "$lib/animotion/motion" with small tweaks
@@ -74,16 +78,19 @@ export function generateStackSVGData(init:StackSVGInitializer){
     data.xPosition ??= xPosition;
     data.yPosition ??= stackStart;
     data.height ??= rectHeight;
+    init.workingData ??= data;
+    init.operatorData ??= data;
+    init.stackData ??= data;
+    init.restData ??= data;
 
     // All SVGs:
     // 1. 3 rect for binary, unary, or pushing operations
     // 2. 1 static rectangle representing "rest of the stack"
     // 3. N for each items that is currently shown
-    const tempWorkingData = {...data, fill:"orange"};
-    const topWorkingRect1 = signal(defaultData(tempWorkingData))
-    const topWorkingRect2 = signal(defaultData(tempWorkingData))
-    const operatorCircle = signal(defaultData(tempWorkingData))
-    const stackRectArray = Array.from({length: maxShown}, () => signal(defaultData(data)))
+    const topWorkingRect1 = signal(defaultData(init.workingData))
+    const topWorkingRect2 = signal(defaultData(init.workingData))
+    const operatorRect = signal(defaultData(init.operatorData))
+    const stackRectArray = Array.from({length: maxShown}, () => signal(defaultData(init.stackData)))
     const restOfStackRect = signal<{opacity: 0 | 1}>({opacity:0})
 
     console.log(data, defaultData(data))
@@ -91,7 +98,7 @@ export function generateStackSVGData(init:StackSVGInitializer){
     function resetAnimation(){
         topWorkingRect1.reset();
         topWorkingRect2.reset();
-        operatorCircle.reset();
+        operatorRect.reset();
         stackRectArray.map(rect => rect.reset());
         restOfStackRect.reset();
     }
@@ -158,7 +165,7 @@ export function generateStackSVGData(init:StackSVGInitializer){
                 // Otherwise, 
                 // All stack items move down by 1
                 const pushedPosition = hasExtra ? (maxShown-1) : (current.length-1);
-
+                console.log("PUSHED: Extra", previousHasExtra, currentHasExtra)
                 await all(
                     ...stackRectArray.map((rect,i) => {
                         const prevVal = previous[previousOffset+i];
@@ -231,7 +238,7 @@ export function generateStackSVGData(init:StackSVGInitializer){
                 // No check, assume there is at least one item
 
                 // Step 1: "Pop" top item to the side
-                const poppedPosition = hasExtra ? (maxShown-1) : (previous.length-1);
+                const poppedPosition = previousHasExtra ? (maxShown-1) : (previous.length-1);
                 
                 all(
                     // Stack Items boxes
@@ -240,8 +247,8 @@ export function generateStackSVGData(init:StackSVGInitializer){
                         if(prevVal && i < previous.length){
                             const endHeight = stackStart - rectHeight * i;
                             // If there is extra, boxes move up, else start height same as end height
-                            const startHeight = hasExtra ? stackStart - rectHeight * Math.max(i-1, 0) : endHeight;
-                            const startingOpacity = i === 0 && hasExtra ? 0 : 1;
+                            const startHeight = previousHasExtra ? stackStart - rectHeight * Math.max(i-1, 0) : endHeight;
+                            const startingOpacity = i === 0 && previousHasExtra ? 0 : 1;
                             // Move box up if room is made above.
                             // Fade in if from bottom
                             return rect
@@ -260,12 +267,12 @@ export function generateStackSVGData(init:StackSVGInitializer){
                     topWorkingRect2
                         .to({opacity: 1, yPosition: stackStart - rectHeight * poppedPosition, value: getItemFromStack(previous, 0)!}, immediate())
                         .to({opacity: 1, yPosition: yTopWorking, xPosition: xPosition+xWorkingOffset}),
-                    operatorCircle.to({opacity: 0, yPosition: yTopWorking + operatorSize/2, value:operation}, immediate())
+                    operatorRect.to({opacity: 0, yPosition: yTopWorking + operatorSize/2, value:operation}, immediate())
                 )
                 // Step 2: Fade in operation
                 .then(
                     async () => {
-                        return await operatorCircle.to({opacity:1})
+                        return await operatorRect.to({opacity:1})
                     }
                 )
                 // Step 3: Combine operation with item to produce new item
@@ -275,14 +282,14 @@ export function generateStackSVGData(init:StackSVGInitializer){
                             topWorkingRect2
                                 .to({xPosition: xPosition})
                                 .to({value: getItemFromStack(current, 0)}, immediate({delay:500})),
-                            operatorCircle.to({xPosition: xPosition, opacity: 0})
+                            operatorRect.to({xPosition: xPosition, opacity: 0})
                         )
                     }
                 )
                 // Step 4: Push result to stack
                 .then(
                     async () => {
-                        const pushedPosition = hasExtra ? (maxShown-1) : (current.length-1);
+                        const pushedPosition = currentHasExtra ? (maxShown-1) : (current.length-1);
 
                         return await all(
                             ...stackRectArray.map((rect,i) => {
@@ -290,8 +297,8 @@ export function generateStackSVGData(init:StackSVGInitializer){
                                 if(currVal && i < current.length){
                                     const startHeight = stackStart - rectHeight * i;
                                     // No changes in height if there is no extra
-                                    const endHeight = hasExtra ? stackStart - rectHeight * Math.max(i-1, 0) : startHeight;
-                                    const endingOpacity = i === 0 && hasExtra ? 0 : 1;
+                                    const endHeight = currentHasExtra ? stackStart - rectHeight * Math.max(i-1, 0) : startHeight;
+                                    const endingOpacity = i === 0 && currentHasExtra ? 0 : 1;
                                     // Transform from previous value to current value and move box down
                                     return rect
                                         .to({opacity: 1, yPosition: startHeight, value: currVal}, immediate())
@@ -306,7 +313,6 @@ export function generateStackSVGData(init:StackSVGInitializer){
                             }),
                             // Rest of stack
                             restOfStackRect
-                                .to({opacity: startingExtraOpacity}, immediate())
                                 .to({opacity: endingExtraOpacity}),
                             // Item being pushed onto the stack
                             topWorkingRect2
@@ -357,12 +363,12 @@ export function generateStackSVGData(init:StackSVGInitializer){
                         .to({opacity: 1, yPosition: stackStart - rectHeight * poppedPositionBelow, value: getItemFromStack(previous, 1)!}, immediate())
                         .to({yPosition: stackStart - rectHeight * poppedPositionTop})
                         .to({yPosition: yTopWorking, xPosition: xPosition-xWorkingOffset}),
-                    operatorCircle.to({opacity: 0, xPosition:xPosition+operatorSize, yPosition: yTopWorking + operatorSize/2, value:operation}, immediate())
+                    operatorRect.to({opacity: 0, xPosition:xPosition+operatorSize, yPosition: yTopWorking + operatorSize/2, value:operation}, immediate())
                 )
                 // Step 2: Fade in operation (in-between)
                 .then(
                     async () => {
-                        return await operatorCircle.to({opacity:1})
+                        return await operatorRect.to({opacity:1})
                     }
                 )
                 // Step 3: Combine operation with items to produce new item
@@ -374,7 +380,7 @@ export function generateStackSVGData(init:StackSVGInitializer){
                             topWorkingRect2
                                 .to({xPosition: xPosition})
                                 .to({value: getItemFromStack(current, 0)}, immediate({delay:500})),
-                            operatorCircle.to({opacity: 0}, {delay:500})
+                            operatorRect.to({opacity: 0}, {delay:500})
                         )
                     }
                 )
@@ -405,7 +411,6 @@ export function generateStackSVGData(init:StackSVGInitializer){
                             }),
                             // Rest of stack
                             restOfStackRect
-                                .to({opacity: startingExtraOpacity}, immediate())
                                 .to({opacity: endingExtraOpacity}),
                             // Item being pushed onto the stack
                             topWorkingRect2
@@ -420,7 +425,7 @@ export function generateStackSVGData(init:StackSVGInitializer){
     return {buildAnimation, resetAnimation, signalData: {
         working1: topWorkingRect1,
         working2: topWorkingRect2,
-        operator: operatorCircle,
+        operator: operatorRect,
         restOfStack: restOfStackRect,
         stackArray: stackRectArray,
     }}

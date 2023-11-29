@@ -7,20 +7,41 @@
 	import StackSvg from "./svg/StackSVG.svelte";
 	import { revealDeck } from "$lib/store";
 
+    const DEFAULT_X = 300;
+    const STARTING_Y = 600;
+    const HEIGHT = 100;
+    const WIDTH = 200;
     export let steps: { result: EvalResult; previous: (number | bigint)[]; current: (number | bigint)[] }[] = [];
     export let setupData: StackSVGInitializer = {
         maxShown: 4,
-        stackStart: 600,
+        stackStart: STARTING_Y,
         rectHeight: 100,
         yOutside: -1000,
-        xPosition: 300,
+        xPosition: DEFAULT_X,
         yTopWorking: 50,
         xWorkingOffset: 250,
-        operatorSize: 0,
+        operatorSize: 50,
+        workingData: {
+            fill: "yellow",
+            stroke: "orange",
+            text: "black",
+            xPosition: DEFAULT_X
+        },
+        operatorData:{
+            height:HEIGHT,
+            width:HEIGHT,
+        },
+        restData: {
+            value: "...",
+            yPosition: STARTING_Y,
+            xPosition: DEFAULT_X - WIDTH/4,
+            height: HEIGHT,
+            width: WIDTH * 1.5,
+        },
         defaultData: {
-            xPosition: 300,
-            yPosition: 600,
-            height: 100,
+            xPosition: DEFAULT_X,
+            yPosition: STARTING_Y,
+            height: HEIGHT,
             width: 200,
             value: 0,
         },
@@ -94,7 +115,7 @@
         operator={animData.signalData.operator}  
         stacks={animData.signalData.stackArray}  
         restOf={animData.signalData.restOfStack}
-        restData={setupData.defaultData ?? {}}
-    />
+        restData={setupData.restData ?? setupData.defaultData ?? {}}
+    />  
 </div>
 </div>

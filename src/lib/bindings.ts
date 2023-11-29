@@ -17,6 +17,7 @@ export function transform(text: string) {
     return invoke()<TransfromResult>("transform", { text })
 }
 
+export type SerializedInstructionTree = { root: SerializedInstructionNode[]; array: SerializedInstruction[] }
 /**
  * Memory Instructions
  */
@@ -25,7 +26,8 @@ export type DataInstruction = "GetLocal" | "GetGlobal" | "SetLocal" | "SetGlobal
  * Comparison operations
  */
 export type ComparisonOperation = "EqualZero" | "Equal" | "NotEqual" | "LessThenSigned" | "LessThenUnsigned" | "GreaterThenSigned" | "GreaterThenUnsigned" | "LessThenOrEqualToSigned" | "LessThenOrEqualToUnsigned" | "GreaterThenOrEqualToSigned" | "GreaterThenOrEqualToUnsigned"
-export type SerializedInstructionTree = { root: SerializedInstructionNode[]; array: SerializedInstruction[] }
+export type InterpreterStructure = { name: string; exported: { [key: string]: [NumLocationKind, number] }; globals: GlobalData[]; memory: MemoryData[]; free_data: DataValue[]; func: WastFunc[]; start: string | null }
+export type DataValue = { id: string; is_string: boolean; data: number[] }
 /**
  * A node representing the instruction block.
  */
@@ -56,9 +58,9 @@ export type SerializedInstruction = { Simple: SimpleInstruction } | { Block: { l
  * Allow the TypeScript side to know about WatError
  */
 export type TransfromResult = { Ok: InterpreterStructure } | { Err: WatError }
+export type GlobalData = { name: string; typ: SerializableWatType; is_mutable: boolean; val: SerializedNumber }
 export type WatError = { span: { start: number; end: number } | null; stage: ErrorStage; message: string | null }
 export type ErrorStage = "Parsing" | "TypeChecking" | "NameResolving" | "Unimplemented"
-export type InterpreterStructure = { name: string; exported: { [key: string]: [NumLocationKind, number] }; globals: GlobalData[]; memory: MemoryData[]; func: WastFunc[] }
 /**
  * Arithmetic operations
  */
@@ -87,13 +89,12 @@ export type NumericConversionKind = "WrapInt" | "SignedTruncF32ToI32" | "Unsigne
  */
 export type SerializedNumber = { first_bytes: number[]; second_bytes: number[] | null; typ: SerializableWatType }
 export type NodeMark = "Block" | "Loop" | { Conditional: number }
+export type MemoryData = { name: string; min: SerializedNumber; max: SerializedNumber; is_32: boolean; is_shared: boolean; data: { [key: number]: DataValue } }
 /**
  * Simple Instructions
  */
 export type SimpleInstruction = "Unreachable" | "Nop" | "Drop" | "Return"
-export type NumLocationKind = "Function" | "Global" | "Memory"
-export type GlobalData = { name: string; typ: SerializableWatType; is_mutable: boolean; val: SerializedNumber }
-export type MemoryData = { name: string; min: SerializedNumber; max: SerializedNumber; is_32: boolean; is_shared: boolean; data: number[] }
+export type NumLocationKind = "Function" | "Global" | "Memory" | "Type"
 /**
  * Represents input and output of a block of instructions.
  * For functions, inputs are parameters and outputs are results.

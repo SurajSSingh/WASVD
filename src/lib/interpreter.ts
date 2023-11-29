@@ -29,7 +29,7 @@ export function getVariable(varTable: VariableTableType, name: string): bigint |
 export type WasmData = {
     globals: VariableTableType,
     memory: {
-        [key:string]: (number|bigint)[]
+        [key:string]: {[key:number]: string | number[]}
     },
     functions: command.WastFunc[],
 }
