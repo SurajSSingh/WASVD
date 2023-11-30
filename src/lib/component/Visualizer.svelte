@@ -158,6 +158,39 @@
                                 {/each}
                             </tbody>
                         </table>
+                        <Accordion>
+                            {#each Object.entries(data.memory) as [name, dataMap]}
+                                <AccordionItem>
+                                    <svelte:fragment slot="summary">{name}</svelte:fragment>
+                                    <svelte:fragment slot="content">
+                                        <div class="table-container">
+                                            <table class="table table-hover">
+                                                <thead>
+                                                    <tr>
+                                                        <th>ID</th>
+                                                        <th>Offset</th>
+                                                        <th>Length</th>
+                                                        <th>Is String?</th>
+                                                        <th>Data</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                {#each Object.entries(dataMap) as [offset, val]}
+                                                    <tr>
+                                                        <td>{val.id}</td>
+                                                        <td>{offset}</td>
+                                                        <td>{val.data.length}</td>
+                                                        <td>{val.is_string}</td>
+                                                        <td>{val.is_string ? (new TextDecoder()).decode(new Uint8Array(val.data)): val.data}</td>
+                                                    </tr>
+                                                {/each}
+                                            </tbody>
+                                        </table>
+                                       </div>
+                                    </svelte:fragment>
+                                </AccordionItem>
+                            {/each}
+                        </Accordion>
                     </div>
                     {/if}
                 </section>

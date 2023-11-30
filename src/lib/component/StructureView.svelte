@@ -39,7 +39,10 @@
                         </h1>
                     {/if}
                 {:else if kind === 'Global'}
-                    <h1>Global {name}</h1>
+                {@const g = $watStructure.globals.at(index)}
+                {#if g}
+                <h2>Global {g.name ?? name}: {g.typ} = {deserialize_number(g.val)}</h2>
+                    {/if}
                 {:else if kind === 'Memory'}
                     {@const m = $watStructure.memory.at(index)}
                     {#if m}
@@ -52,11 +55,14 @@
                             <li>Is Shared: {m.is_shared}</li>
                         </ul>
                         <h3>Current Data</h3>
-                        <p>{m.data}</p>
+                        {#each Object.entries(m.data) as [offset, data]}
+                            <h4>{data.id} (@offset {offset})</h4>
+                            <p>{data.is_string ? (new TextDecoder()).decode(new Uint8Array(data.data)): data.data}</p>
+                        {/each}
                     {:else}
-                        <h1 class=" bg-error-500">
+                        <h2 class=" bg-error-500">
                             No function at index {index} for exported name {name}
-                        </h1>
+                        </h2>
                     {/if}
                 {/if}
             {/each}
